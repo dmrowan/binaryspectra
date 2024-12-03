@@ -9,8 +9,8 @@ from scipy.optimize import minimize
 from tqdm import tqdm
 import warnings
 
-from binaryspec import spectrum_utils, utils
-from binaryspec import profiles
+from binaryspectra import spectrum_utils, utils
+from binaryspectra import profiles
 
 #Dom Rowan 2024
 

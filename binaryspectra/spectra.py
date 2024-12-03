@@ -6,15 +6,22 @@ from astropy.io import votable
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 from astropy.modeling import models
+from astroquery.vizier import Vizier
+from astroquery.gaia import Gaia
+Gaia.ROW_LIMIT = -1
+import io
 import matplotlib.pyplot as plt
 from matplotlib import rc
 import numpy as np
 import pandas as pd
+from pyvo.dal.ssa import SSAService
+import requests
 from scipy.ndimage import median_filter
 from specutils.manipulation import FluxConservingResampler
 from specutils import Spectrum1D
 from specutils.fitting import fit_generic_continuum
-from tqdm import tqdm
+import subprocess
+from tqdm.autonotebook import tqdm
 import warnings
 
 from binaryspectra.base_spectrum import *
@@ -488,4 +495,85 @@ class LAMOSTMRSspec(spectra.EchelleSpectrum):
         self.Orders = [ spec_b, spec_r ]
         self.wavelength_unit = u.AA
         self.flux_unit = u.dimensionless_unscaled
+
+class GaiaSpec(BaseSpectrum):
+    
+    def query_gaia(self):
+
+        query = (
+            f"""
+            SELECT params.*, gaia.*, dist.*
+            FROM gaiadr3.astrophysical_parameters AS params
+            JOIN gaiadr3.gaia_source AS gaia ON params.source_id = gaia.source_id
+            JOIN external.gaiaedr3_distance AS dist ON params.source_id = dist.source_id
+            WHERE params.source_id = {self.Source}
+            """)
+
+        job = Gaia.launch_job(query)
+        r = job.get_results().to_pandas().iloc[0].to_dict()
+
+        self.params = r
+
+        return self.params
+
+class GaiaRVSspec(GaiaSpec):
+
+    def __init__(self, source):
+        
+        rvs_query = Vizier(columns=["*", "+_r"], catalog="I/355/rvsmean")
+        rvs_query.ROW_LIMIT = -1
+
+        r = rvs_query.query_constraints(Source=str(source))[0]
+        rvs_table = r.to_pandas()
+
+        self.df = pd.DataFrame({'wavelength':rvs_table['lambda']*10,
+                                'flux':rvs_table['Flux'].values,
+                                'flux_err':rvs_table['e_Flux'].values})
+
+        self.header = {}
+        self.Source = source
+
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.dimensionless_unscaled
+
+class GaiaXPspec(GaiaSpec):
+
+    def __init__(self, source):
+
+        xp_query= Vizier(columns=["*", "+_r"], catalog="I/355/xpsample")
+        xp_query.ROW_LIMIT = -1
+
+        r = xp_query.query_constraints(Source=str(source))[0]
+        xp_spec_result = r.to_pandas()
+
+        xp_spec_result['wavelength']=xp_spec_result['lambda']*10
+        xp_spec_result['flux']=xp_spec_result['Flux']
+        xp_spec_result['flux_err']=xp_spec_result['e_Flux']
+        xp_spec_result=xp_spec_result.loc[xp_spec_result['Source']==source]
+        self.df = xp_spec_result[['wavelength', 'flux', 'flux_err']].reset_index(drop=True)
+
+        self.header = {}
+        self.Source = source
+
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.Unit('W/m2/nm')
+
+    def query_gaia(source):
+
+        super().query_gaia()
+
+        query = (
+            f"""
+            SELECT andrae.*
+            FROM external.xgboost_table1 AS andrae
+            WHERE andrae.source_id = {source}
+            """)
+
+        job = Gaia.launch_job(query)
+        r = job.get_results()
+        r = r.to_pandas().iloc[0]
+
+        self.params['teff_xgboost'] = r.teff_xgboost
+        self.params['logg_xgboost'] = r.logg_xgboost
+        self.params['mh_xgboost'] = r.mh_xgboost
 

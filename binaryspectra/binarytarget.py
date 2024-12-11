@@ -2,6 +2,7 @@
 
 from astropy import units as u
 import brokenaxes
+import copy
 import corner
 import dill
 import emcee
@@ -204,6 +205,54 @@ class SpectroscopicBinary:
             self.df_rv = pd.read_csv(fname)
         self.instrument_list = self.df_rv.Instrument.value_counts().index
 
+    def plot_rv_orbit_broken(self, fig=None, gs=None, savefig=None, gap=5, **kwargs):
+        
+        #Determine breaks
+        df_rv = self.df_rv.copy().sort_values(by='JD', ascending=True).reset_index(drop=True)
+        df_rv['gap'] = np.concatenate([np.zeros(1), np.diff(df_rv.JD)])
+
+        #Period to use for break selection
+        period = self.rv_samples.period.median()
+        df_rv['gap_period'] = df_rv.gap / period
+        idx = np.where(df_rv.gap_period > gap)[0]
+        xlims = []
+        
+        if len(idx):
+            df_split = [ df_rv.iloc[:idx[0]] ]
+
+            for i in range(1, len(idx)):
+                df_split.append(df_rv[idx[i-1]:idx[i]])
+            df_split.append(df_rv[idx[-1]:])
+
+            #Now get xlims from split dfs
+            for i in range(len(df_split)):
+                xlims.append( (df_split[i].JD.min()-period*0.25, df_split[i].JD.max()+period*0.25))
+        else:
+            ax = fig.add_subplot(gs)
+            return self.plot_rv_orbit(ax=ax, **kwargs)
+
+        if fig is None:
+            created_fig = True
+            fig = plt.Figure(figsize=(10, 6))
+            fig.subplots_adjust(top=.95, right=.98)
+            bax = brokenaxes.brokenaxes(fig=fig, xlims=xlims, despine=False)
+            bax = self.plot_rv_orbit(ax=bax, **kwargs)
+
+            bax = plotutils.plotparams_bax(bax)
+
+        else:
+            created_fig = False
+            bax = brokenaxes.brokenaxes(fig=fig, subplot_spec=gs, xlims=xlims, despine=False)
+            bax = self.plot_rv_orbit(ax=bax, **kwargs)
+
+        if created_fig:
+            if savefig is not None:
+                fig.savefig(savefig)
+            else:
+                plt.show()
+        else:
+            return bax
+
     def to_dill(self, outfile):
         
         with open(outfile, 'wb') as p:
@@ -213,20 +262,81 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
     def measure_rvs(self, template):
         
-        pass
+        current_verbose = self.verbose
+        self.verbose = False
+        for i, spec in tqdm(enumerate(self.spectra)):
+            spec.cross_correlation(template)
+            spec.ccf.model()
 
     def build_rv_table(self):
-        
-        pass
 
-    def plot_rvs(self, ax=None, savefig=None):
+        jds = []
+        rvs1 = []
+        rv_errs1 = []
+        instruments = []
+        specs = []
 
-        pass
+        spec_lists = [self.pepsi_spectra, self.apf_spectra, self.chiron_spectra]
+        instrument_list = ['PEPSI', 'APF', 'CHIRON']
+
+        for spec_list, instrument in zip(spec_list, instrument_list):
+            
+            for spec in spec_list:
+                
+                jds.append(spec.JD)
+
+                if isinstance(spec, spectra.APFspec):
+                    rvs1.append(spec.ccf.models[0].mu - 2.36)
+                else:
+                    rvs1.append(spec.ccf.models[0].mu)
+
+                rv_errs1.append(spec.ccf.models[0].emu)
+                instruments.append(instrument)
+                specs.append(spec)
+
+        self.df_rv = pd.DataFrame({'JD':jds,
+                                   'RV1': rvs1,
+                                   'RV1_err':rv_errs1,
+                                   'Instrument':instruments,
+                                   'spec':specs})
+
+        self.df_rv = self.df_rv.sort_values(by='JD', ascending=True)
+        self.df_rv = self.df_rv.reset_index(drop=True)
+
+        self.df_rv['JD'] = self.df_rv.JD - 2.46e6
+        self.instrument_list = self.df_rv.Instrument.value_counts().index
+
+
+    def plot_rvs(self, ax=None, savefig=None, markers_dict=None, plot_kwargs=None):
+
+        fig, ax, created_fig = plotutils.fig_init(ax, figsize=(10, 6))
+
+        if markers_dict is None:
+            markers_dict = plotutils.create_markers_dict(self.instrument_list)
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+
+        plot_kwargs.setdefault('color', 'black')
+        plot_kwargs.setdefault('ls', '')
+
+        for instrument in self.instrument_list:
+            
+            df_plot = self.df_rv[self.df_rv.Instrument == instrument]
+            ax.errorbar(df_plot.JD, df_plot.RV1, yerr=df_plot.RV1_err,
+                        marker=markers_dict[instrument],
+                        **plot_kwargs)
+
+        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$ [d]', fontsize=20)
+        ax.set_ylabel(r'Radial Velocity [km/s]', fontsize=20)
+
+        return plotutils.plt_return(created_fig, fig, ax, savefig)
+
 
     def fit_rvs(self, guess, niters=50000, burnin=10000, idx_mask=None, **lnprob_kwargs):
 
         '''
-        Fit RV model to just the primary (good for SB1 targets)
+        Fit RV model 
         '''
 
         K1, gamma, M0, ecc, omega, period = guess
@@ -269,36 +379,45 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         columns = ['K1', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs']
         columns = columns + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
         rv_samples.columns = columns
-        self.rv_samples_sb1 = rv_samples
-
         rv_samples['T0'] = rv_samples.M0 * rv_samples.period / (2*np.pi)
+        self.rv_samples = rv_samples
 
-    def plot_rv_corner(self, savefig=None, figsize=None):
+        #Add mass function column
+        self.rv_samples['fM'] = utils.mass_function(
+                self.rv_samples.period.to_numpy()*u.day,
+                np.abs(self.rv_samples.K.to_numpy())*u.km/u.s,
+                e=self.rv_samples.ecc.to_numpy()).value
 
-        if not hasattr(self, 'rv_samples_sb1'):
+
+    def plot_rv_corner(self, savefig=None, figsize=None, offset_numeric_label=True):
+
+        if not hasattr(self, 'rv_samples'):
             raise ValueError('RV orbit must be fit first')
 
-        samples = self.rv_samples_sb1.copy()
+        samples = self.rv_samples.copy()
         samples['M0'] = samples.T0.values
         samples = samples.drop(columns=['T0'], errors='ignore')
 
-        labels = [r'$K_1\ \rm{(km/s)}$', r'$\gamma\ \rm{(km/s)}$', 
-                  r'$T_0\ \rm{(d)}$',
-                  'Ecc', r'$\omega\ (\rm{rad})$', r'$P \rm{(d)}$',
-                  r'$\log s$']
+        labels = [r'$K_1\ \rm{[km/s]}$', r'$\gamma\ \rm{[km/s]}$', 
+                  r'$T_0\ \rm{[d]}$',
+                  'Ecc', r'$\omega\ [\rm{rad}]$', r'$P \rm{[d]}$',
+                  r'$\log s\ \rm{[km/s]}$']
 
-        units = [r'$\rm{(km/s)}$', 
-                 r'$\rm{(km/s)}$', 
-                 r'$(\rm{d})$',
+        units = [r'$\rm{[km/s]}$', 
+                 r'$\rm{[km/s]}$', 
+                 r'$[\rm{d}]$',
                  '', 
-                 r'$(\rm{rad})$',
-                 r'$(\rm{d})$',
-                 r'$\rm{(km/s)}$']
+                 r'$[\rm{rad}]$',
+                 r'$[\rm{d}]$',
+                 r'$\rm{[km/s]}$']
 
         for i in range(len(self.instrument_list)-1):
             instrument = self.instrument_list[i]
-            labels.append(r'$\delta\rm{RV}_{\textnormal{\small '+instrument+r'}}(\rm{km/s})$')
-            #labels.append(r'$\delta\rm{RV}_{'+str(i)+r'}\ (\rm{km/s})$')
+            if offset_numeric_label:
+                labels.append(r'$\delta\rm{RV}_{'+str(i)+r'}\ \rm{[km/s]}$')
+            else:
+                labels.append(r'$\delta\rm{RV}_{\textnormal{\small '+instrument+r'}}\ \rm{[km/s]}$')
+
             units.append(r'$\rm{(km/s)}$')
 
         if figsize is None:
@@ -334,59 +453,232 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         else:
             fig.savefig(savefig)
 
-    def plot_rv_orbit(self, ax=None, savefig=None, legend=False):
+    def plot_rv_orbit(self, ax=None, savefig=None, legend=False,
+                      markers_dict=None):
         
-        if not hasattr(self, 'rv_samples_sb1'):
+        if not hasattr(self, 'rv_samples'):
             raise ValueError('RV orbit must be fit first')
 
         '''
         Plot single-lined RV model
         '''
 
-        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(8, 6))
+        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
         if created_fig:
             fig.subplots_adjust(top=.98, right=.98)
 
         tvals = np.linspace(self.df_rv.JD.min()-10, self.df_rv.JD.max()+10,
                             int(1e4))
 
-        rv_offsets = [0] + [ self.rv_samples_sb1[f'rv_offset_{i-1}'].median()
+        rv_offsets = [0] + [ self.rv_samples[f'rv_offset_{i-1}'].median()
                              for i in range(1, len(self.instrument_list)) ]
+
+        if markers_dict is None:
+            markers_dict = plotutils.create_markers_dict(self.instrument_list)
 
         for instrument, offset in zip(self.instrument_list, rv_offsets):
             
             df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & (self.df_rv.mask_rv == 0)]
+            df_plot_masked = self.df_rv[(self.df_rv.Instrument == instrument) &
+                                        (self.df_rv.mask_rv == 1)]
 
             e1 = ax.errorbar(df_plot.JD, df_plot.RV1 - offset,
                         yerr=df_plot.RV1_err,
-                        color='white', markeredgecolor='xkcd:red', mew=2,
-                        ecolor='xkcd:red', 
-                        marker=markers[instrument], ls='',
+                        color='white', markeredgecolor='black', mew=2,
+                        ecolor='black', 
+                        marker=markers_dict[instrument], ls='',
                         label=instrument)
+
+            if len(df_plot_masked):
+                
+                ax.errorbar(df_plot_masked.JD, df_plot_masked.RV1 - offset,
+                            yerr = df_plot_masked.RV1_err,
+                            color='white', markeredgecolor='black', mew=1,
+                            ecolor='black',
+                            marker=markers_dict[instrument], ls='', 
+                            alpha=0.5)
 
         for i in range(100):
             
-            sample = self.rv_samples_sb1.iloc[
+            sample = self.rv_samples.iloc[
                     np.random.randint(0, len(self.rv_samples_sb1))].to_numpy()
             K1, gamma, phi0, ecc, omega, period = sample[:6]
 
             model1 = rv_orbit_fitter.rv_model(tvals, K1, gamma, phi0, ecc, omega, period)
 
-            ax.plot(tvals, model1, color='black', lw=1, alpha=0.2, zorder=1)
+            ax.plot(tvals, model1, color='xkcd:red', lw=1, alpha=0.2, zorder=1)
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
-        ax.set_ylabel(r'$\rm{RV}\ (\rm{km/s})$', fontsize=20)
+        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$ [d]', fontsize=20)
+        ax.set_ylabel(r'$\rm{RV}\ [\rm{km/s}]$', fontsize=20)
 
         if legend:
-            ax.legend(loc='center left', edgecolor='black', fontsize=15)
+            if legend_kwargs is None:
+                legend_kwargs = {}
+
+            legend_kwargs.setdefault('fontsize', 15)
+            legend_kwargs.setdefault('edgecolor', 'black')
+            legend_kwargs.setdefault('loc', 'lower left')
+
+            if isinstance(ax, brokenaxes.BrokenAxes):
+
+                if legend_kwargs['loc'].split()[1] == 'left':
+                    axs = ax.axs[0]
+                else:
+                    axs =ax.axs[-1]
+
+                ylim = axs.get_ylim()
+                xlim = axs.get_xlim()
+
+                handles = []
+                for instrument in self.instrument_list:
+                    
+                    df_plot = self.df_rv[self.df_rv.Instrument == instrument]
+                    e1 = axs.errorbar([-99], [99], [10], color='white', 
+                                      markeredgecolor='black', mew=2,
+                                      ls='', marker=markers_dict[instrument])
+                    handles.append(e1)
+
+                axs.legend(handles, self.instrument_list,
+                           **legend_kwargs)
+        else:
+            ax.legend(**legend_kwargs)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
-    def plot_rv_orbit_broken(self):
+    def calculate_rv_residuals(self, idx=None):
+        
+        if not hasattr(self, 'rv_samples'):
+            raise ValueError('RV orbit must be fit first')
 
-        pass
+        if idx is None:
+            idx = np.argsort(self.rv_samples.period.values)[len(self.rv_samples)//2]
+        sample = self.rv_samples.iloc[idx].to_numpy()
+
+        K1, gamma, phi0, ecc, omega, period, logs = sample[:7]
+        rv_offset_values = np.concatenate([np.array([0]), sample[7:]])
+        rv1_offset_corrected = []
+
+        for i in range(len(self.df_rv)):
+            
+            instrument = self.df_rv.Instrument.iloc[i]
+            j = np.where(np.asarray(self.instrument_list) == instrument)[0][0]
+            offset = rv_offset_values[j]
+
+            rv1_offset_corrected.append(self.df_rv.RV1.iloc[i] - offset)
+
+        self.df_rv['RV1_offset'] = rv1_offset_corrected
+
+        self.df_rv['model'] = rv_orbit_fitter.rv_model(
+                self.df_rv.JD.values, K1, gamma, phi0, ecc, omega, period)
+        self.df_rv['residual'] = self.df_rv.RV1_offset - self.df_rv.model
+
+        s1 = np.exp(logs)
+
+        self.df_rv['RV1_err_jitter'] = np.sqrt(
+                np.power(self.df_rv.RV1_err, 2)+s1**2)
+
+    def calculate_rv_chi2(self):
+
+        self.calculate_rv_residuals()
+
+        residuals = self.df_rv.residual.values
+        errors = self.df_rv.RV1_err.values
+        errors_with_jitter = self.df_rv.RV1_err_jitter.values
+
+        idx_include = np.where(self.df_rv.mask_rv == 0)[0]
+
+        self.rv_chi2 = np.sum(np.power(residuals[idx_include]/errors[idx_include],2))
+        self.rv_chi2_jitter = np.sum(np.power(residuals[idx_include]/errors_with_jitter[idx_include],2))
+
+        dof = 7 #K1, gamma, M0, ecc, omega, period, logs
+
+        self.rv_chi2_nu = self.rv_chi2 / (len(residuals[idx_include]) - dof)
+        self.rv_chi2_nu_jitter = self.rv_chi2_jitter / (len(residuals[idx_include]) - dof)
+
+        return self.rv_chi2_nu, self.rv_chi2_nu_jitter
+
+    def plot_rv_residuals(self, with_jitter=False, plot_masked=True,
+                          ax=None, savefig=None, legend=False, legend_kwargs=none,
+                          markers_dict=None,
+                          plot_kwargs=None,
+                          label_chi2=True):
+        
+        if 'residual' not in self.df_rv.columns:
+            self.calculate_rv_residuals()
+
+        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
+
+        if markers_dict is None:
+            markers_dict = plotutils.create_markers_dict(self.instrument_list)
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+        plot_kwargs.setdefault('color', 'black')
+        plot_kwargs.setdefault('ls', '')
+        plot_kwargs.setdefault('alpha', 1.0)
+
+        plot_kwargs_masked = copy.deepcopy(plot_kwargs)
+        plot_kwargs_masked['alpha'] *= 0.5
+
+        if with_jitter:
+            yerr_column = 'RV1_err_jitter'
+        else:
+            yerr_column = 'RV1_err'
+
+        for instrument in self.instrument_list:
+
+            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & (self.df_rv.mask_rv == 0)]
+            df_plot_masked = self.df_rv[(self.df_rv.Instrument == instrument) &
+                                        (self.df_rv.mask_rv == 1)]
+
+            ax.errorbar(df_plot.JD, df_plot.residual, yerr=df_plot[yerr_column],
+                        marker=markers_dict[instrument],
+                        **plot_kwargs)
+
+            if len(df_plot_masked) and plot_masked:
+
+                ax.errorbar(df_plot_masked.JD, df_plot_masked.residual,
+                            yerr=df_plot_masked[yerr_column],
+                            marker=markers_dict[instrument],
+                            **plot_kwargs_masked)
+
+        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
+        ax.set_ylabel(r'Residuals (km/s)', fontsize=20)
+
+        ax.axhline(0.0, color='gray', ls='--')
+
+        ylim = np.max(np.abs(ax.get_ylim()))
+        ax.set_ylim(-1*ylim, ylim)
+
+        if legend:
+
+            if legend_kwargs is None:
+                legend_kwargs = {}
+            legend_kwargs.setdefault('fontsize', 15)
+            legend_kwargs.setdefault('edgecolor', 'black')
+            legend_kwargs.setdefault('loc', 'lower left')
+
+            ax.legend(handles, self.instrument_list,
+                      handler_map={tuple: HandlerTuple(ndivide=None)},
+                      **legend_kwargs)
+
+        if label_chi2:
+            
+            if with_jitter:
+                chi2_val = self.rv_chi2_nu_jitter
+            else:
+                chi2_val = self.rv_chi2_nu
+
+            label = r'$\chi^2_{\nu} = '+f'{chi2_val:.2f}'+r'$'
+            ax.text(.95, .95, label, ha='right', va='top', fontsize=15, transform=ax.transAxes)
+
+    def get_quadrature_spec(self):
+        
+        gamma = self.rv_samples.gamma.median()
+        idx = np.argmax(np.abs(self.df_rv.RV1 - gamma))
+
+        return self.df_rv.spec.iloc[idx]
     
-
 class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
     def measure_rvs(self, template1, template2):
@@ -665,8 +957,7 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
                              for i in range(1, len(self.instrument_list)) ]
 
         if markers_dict is None:
-            markers = ['o', 's', 'd', 'h', 'D', 'P'] 
-            markers_dict = dict(zip(self.instrument_list, markers[:len(self.instrument_list)]))
+            markers_dict = plotutils.create_markers_dict(self.instrument_list) 
         
         handles = []
         for instrument, offset in zip(self.instrument_list, rv_offsets):
@@ -736,7 +1027,7 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
                 xlim = axs.get_xlim()
 
                 handles = []
-                for instrument, offset in zip(self.instrument_list, rv_offsets):
+                for instrument in self.instrument_list:
                     
                     df_plot = self.df_rv[self.df_rv.Instrument == instrument]
                     e1 = axs.errorbar([-99], [99], [10], color='white', 
@@ -763,54 +1054,6 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
-    def plot_rv_orbit_broken(self, fig=None, gs=None, savefig=None, gap=5, legend=False,
-                             legend_kwargs=None):
-        
-        #Determine breaks
-        df_rv = self.df_rv.copy().sort_values(by='JD', ascending=True).reset_index(drop=True)
-        df_rv['gap'] = np.concatenate([np.zeros(1), np.diff(df_rv.JD)])
-
-        #Period to use for break selection
-        period = self.rv_samples.period.median()
-        df_rv['gap_period'] = df_rv.gap / period
-        idx = np.where(df_rv.gap_period > gap)[0]
-        xlims = []
-        
-        if len(idx):
-            df_split = [ df_rv.iloc[:idx[0]] ]
-
-            for i in range(1, len(idx)):
-                df_split.append(df_rv[idx[i-1]:idx[i]])
-            df_split.append(df_rv[idx[-1]:])
-
-            #Now get xlims from split dfs
-            for i in range(len(df_split)):
-                xlims.append( (df_split[i].JD.min()-period*0.25, df_split[i].JD.max()+period*0.25))
-        else:
-            ax = fig.add_subplot(gs)
-            return self.plot_rv_orbit(ax=ax, legend=legend, legend_kwargs=legend_kwargs)
-
-        if fig is None:
-            created_fig = True
-            fig = plt.Figure(figsize=(10, 6))
-            fig.subplots_adjust(top=.95, right=.98)
-            bax = brokenaxes.brokenaxes(fig=fig, xlims=xlims, despine=False)
-            bax = self.plot_rv_orbit(ax=bax, legend=legend, legend_kwargs=legend_kwargs)
-
-            bax = plotutils.plotparams_bax(bax)
-
-        else:
-            created_fig = False
-            bax = brokenaxes.brokenaxes(fig=fig, subplot_spec=gs, xlims=xlims, despine=False)
-            bax = self.plot_rv_orbit(ax=bax, legend=legend, legend_kwargs=legend_kwargs)
-
-        if created_fig:
-            if savefig is not None:
-                fig.savefig(savefig)
-            else:
-                plt.show()
-        else:
-            return bax
 
     def calculate_rv_residuals(self, idx=None):
 

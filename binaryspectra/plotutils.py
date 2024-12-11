@@ -263,3 +263,15 @@ def rv_phase_check(rgeb, savefig=None):
 
     return plt_return(True, fig, ax, savefig)
 
+def create_markers_dict(instrument_list):
+    
+    markers = ['o', 's', 'd', 'h', 'D', 'P']
+    if len(instrument_list) > len(markers):
+        raise ValueError(f'Not enough default markers ({len(markers)})for given instrument list ({len(instrument_list)})')
+    else:
+        markers_dict = dict(zip(instrument_list, markers[:len(instrument_list)]))
+
+        return markers_dict
+
+
+

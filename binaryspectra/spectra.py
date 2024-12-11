@@ -6,15 +6,22 @@ from astropy.io import votable
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 from astropy.modeling import models
+from astroquery.vizier import Vizier
+from astroquery.gaia import Gaia
+Gaia.ROW_LIMIT = -1
+import io
 import matplotlib.pyplot as plt
 from matplotlib import rc
 import numpy as np
 import pandas as pd
+from pyvo.dal.ssa import SSAService
+import requests
 from scipy.ndimage import median_filter
 from specutils.manipulation import FluxConservingResampler
 from specutils import Spectrum1D
 from specutils.fitting import fit_generic_continuum
-from tqdm import tqdm
+import subprocess
+from tqdm.autonotebook import tqdm
 import warnings
 
 from .base_spectrum import *
@@ -296,3 +303,277 @@ class PHOENIXspec(BaseSpectrum):
         self.verbose=verbose
 
         self.df['mask'] = np.zeros(len(self.df))
+
+class RAVEspec(BaseSpectrum):
+    '''
+    RAVE DR6
+    '''
+    
+    def __init__(self, rave_id, verbose=True):
+
+        self.rave_id = rave_id
+        url = f'https://www.rave-survey.org/files/fits/{rave_id.split("_")[0]}/RAVE_{rave_id}.fits'
+        urlData = requests.get(url).content
+        hdul = fits.open(io.BytesIO(urlData))
+
+        val1 = hdul[1].header['CRVAL1']
+        val2 = hdul[1].header['CDELT1']
+
+        yvals = hdul[1].data.byteswap().newbyteorder()
+        xvals = val1 + np.arange(len(yvals)) * val2
+
+        self.df = pd.DataFrame({'wavelength':xvals,
+                                'flux':yvals})
+        self.df['flux_erx'] = 0
+        self.df = self.df.sort_values(by='wavelength', ascending=True).reset_index(drop=True)
+
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.dimensionless_unscaled
+        self.verbose = verbose
+        
+        self.header = {}
+        for k in list(hdul[0].header.keys()):
+            if k != '':
+                self.header[k] = hdul[0].header[k]
+
+    def get_madera(self):
+
+        r = Vizier(catalog="III/283/madera", columns=['*'])
+        self.madera = r.query_constraints(ObsID=self.rave_id)[0].to_pandas().iloc[0].to_dict()
+
+        return self.madera
+
+class ASPCAPspec(EchelleSpectrum):
+    '''
+    APOGEE ASPCAP spectra (DR17)
+    '''
+
+    def __init__(self, apogee_id):
+
+        self.apogee_id = apogee_id
+        r = Vizier(catalog = "III/286/catalog",
+                   columns=['APOGEE', 'Tel', 'Loc', 'Field', 'Teff', 'logg', '[M/H]'])
+        r = r.query_constraints(APOGEE=apogee_id)[0].to_pandas().iloc[0].to_dict()
+
+        telescope = r['Tel']
+        field = r['Field']
+
+        url = f'https://data.sdss.org/sas/dr17/apogee/spectro/aspcap/dr17/synspec_rev1/{telescope}/{field}/aspcapStar-dr17-{apogee_id}.fits'
+        urlData = requests.get(url).content
+        hdul = fits.open(io.BytesIO(urlData))
+
+        yvals = hdul[1].data
+        val1 = hdul[1].header['CRVAL1']
+        val2 = hdul[1].header['CDELT1']
+        xvals = val1 + np.arange(len(yvals))*val2
+        xvals = np.power(10, xvals)
+
+        self.df = pd.DataFrame({'wavelength':xvals,
+                                'flux':yvals.byteswap().newbyteorder()})
+        self.df['flux_err'] = 0
+        self.df = self.df[self.df.flux > 0].reset_index(drop=True)
+        self.df = self.df.sort_values(by='wavelength', ascending=True).reset_index(drop=True)
+
+        idx0 = np.nanargmax(self.df.wavelength.diff())
+        df0 = self.df.iloc[:idx0].copy()
+        df1 = self.df.iloc[idx0:].copy()
+
+        if len(df0) > len(df1):
+            idx1 = np.nanargmax(df0.wavelength.diff())
+            dfa = df0.iloc[:idx1]
+            dfb = df0.iloc[idx1:]
+            dfc = df1
+        else:
+            idx1 = np.argmax(df1.wavelength.diff())
+            dfa = df0
+            dfb = df1.iloc[:idx1]
+            dfc = df1.iloc[idx1:]
+
+        self.Orders = []
+        for i, dfi in enumerate([dfa, dfb, dfc]):
+            self.Orders.append(spectra.EchelleOrder(i, dfi.wavelength.values, dfi.flux.values))
+
+        for Order in self.Orders:
+            Order.flux_filter(1.2)
+
+        self.header = {}
+        for k in list(hdul[0].header.keys()):
+            if k != '':
+                self.header[k] = hdul[0].header[k]
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.dimensionless_unscaled
+
+        self.params = {}
+        self.params['Teff'] = r['Teff']
+        self.params['logg'] = r['logg']
+        self.params['mh'] = r['__M_H_']
+
+class GALAHspec(spectra.EchelleSpectrum):
+    '''
+    GALAH DR3
+    '''
+
+    def __init__(self, target_name):
+
+        self.target_name = target_name
+        orders = []
+        header = None
+        for band in ['B', 'V', 'R', 'I']:
+
+            url = f'https://datacentral.org.au/vo/slink/links?ID={target_name}&DR=galah_dr3&IDX=0&FILT={band}&RESPONSEFORMAT=fits'
+
+            urlData = requests.get(url).content
+            hdul = fits.open(io.BytesIO(urlData))
+
+            if header is None:
+                self.header = {}
+                for k in list(hdul[0].header.keys()):
+                    if k != '':
+                        self.header[k] = hdul[0].header[k]
+            val1 = hdul[0].header['CRVAL1']
+            val2 = hdul[0].header['CDELT1']
+
+            yvals = hdul[0].data
+            xvals = val1 + np.arange(len(yvals))*val2
+
+            spec = spectra.EchelleOrder(band, xvals, yvals)
+            orders.append(spec)
+
+        self.header = header
+        self.Orders = orders
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.dimensionless_unscaled
+
+class LAMOSTMRSspec(spectra.EchelleSpectrum):
+    
+    '''
+    LAMOST medium resolution survey (DR8)
+    '''
+
+    def __init__(self, obsid):
+
+        self.obsid = obsid
+        url_lamost = f'https://www.lamost.org/dr8/v2.0/medspectrum/fits/{obsid}'
+        response = requests.get(url_lamost, stream=True)
+        content_disposition = response.headers.get("Content-Disposition", "")
+
+        subprocess.call(['curl', '-O', '-J', url_lamost, '--clobber', '--silent'])
+
+        hdul = fits.open(content_disposition.split('filename=')[1])
+
+        i_coadd_b = None
+        i_coadd_r = None
+
+        for i in range(1, len(hdul)):
+            if (i_coadd_b is not None) and (i_coadd_r is not None):
+                break
+            elif hdul[i].header['EXTNAME'] == 'COADD_B':
+                i_coadd_b = i
+            elif hdul[i].header['EXTNAME'] == 'COADD_R':
+                i_coadd_r = i
+            else:
+                continue
+
+        if i_coadd_b is not None:
+            data_b = hdul[i_coadd_b].data
+            spec_b = spectra.EchelleOrder('B',
+                                          data_b['WAVELENGTH'].reshape(-1).byteswap().newbyteorder(),
+                                          data_b['FLUX'].reshape(-1).byteswap().newbyteorder())
+            spec_b.trim_edges(5)
+            spec_b.fit_continuum()
+        if i_coadd_r is not None:
+            data_r = hdul[i_coadd_r].data
+            spec_r = spectra.EchelleOrder('R', data_r['WAVELENGTH'].reshape(-1).byteswap().newbyteorder(),
+                                          data_r['FLUX'].reshape(-1).byteswap().newbyteorder())
+            spec_r.trim_edges(5)
+            spec_r.fit_continuum()
+
+        self.header = {}
+        for k in list(hdul[0].header.keys()):
+            if k != '':
+                self.header[k] = hdul[0].header[k]
+        self.Orders = [ spec_b, spec_r ]
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.dimensionless_unscaled
+
+class GaiaSpec(BaseSpectrum):
+    
+    def query_gaia(self):
+
+        query = (
+            f"""
+            SELECT params.*, gaia.*, dist.*
+            FROM gaiadr3.astrophysical_parameters AS params
+            JOIN gaiadr3.gaia_source AS gaia ON params.source_id = gaia.source_id
+            JOIN external.gaiaedr3_distance AS dist ON params.source_id = dist.source_id
+            WHERE params.source_id = {self.Source}
+            """)
+
+        job = Gaia.launch_job(query)
+        r = job.get_results().to_pandas().iloc[0].to_dict()
+
+        self.params = r
+
+        return self.params
+
+class GaiaRVSspec(GaiaSpec):
+
+    def __init__(self, source):
+        
+        rvs_query = Vizier(columns=["*", "+_r"], catalog="I/355/rvsmean")
+        rvs_query.ROW_LIMIT = -1
+
+        r = rvs_query.query_constraints(Source=str(source))[0]
+        rvs_table = r.to_pandas()
+
+        self.df = pd.DataFrame({'wavelength':rvs_table['lambda']*10,
+                                'flux':rvs_table['Flux'].values,
+                                'flux_err':rvs_table['e_Flux'].values})
+
+        self.header = {}
+        self.Source = source
+
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.dimensionless_unscaled
+
+class GaiaXPspec(GaiaSpec):
+
+    def __init__(self, source):
+
+        xp_query= Vizier(columns=["*", "+_r"], catalog="I/355/xpsample")
+        xp_query.ROW_LIMIT = -1
+
+        r = xp_query.query_constraints(Source=str(source))[0]
+        xp_spec_result = r.to_pandas()
+
+        xp_spec_result['wavelength']=xp_spec_result['lambda']*10
+        xp_spec_result['flux']=xp_spec_result['Flux']
+        xp_spec_result['flux_err']=xp_spec_result['e_Flux']
+        xp_spec_result=xp_spec_result.loc[xp_spec_result['Source']==source]
+        self.df = xp_spec_result[['wavelength', 'flux', 'flux_err']].reset_index(drop=True)
+
+        self.header = {}
+        self.Source = source
+
+        self.wavelength_unit = u.AA
+        self.flux_unit = u.Unit('W/m2/nm')
+
+    def query_gaia(source):
+
+        super().query_gaia()
+
+        query = (
+            f"""
+            SELECT andrae.*
+            FROM external.xgboost_table1 AS andrae
+            WHERE andrae.source_id = {source}
+            """)
+
+        job = Gaia.launch_job(query)
+        r = job.get_results()
+        r = r.to_pandas().iloc[0]
+
+        self.params['teff_xgboost'] = r.teff_xgboost
+        self.params['logg_xgboost'] = r.logg_xgboost
+        self.params['mh_xgboost'] = r.mh_xgboost
+

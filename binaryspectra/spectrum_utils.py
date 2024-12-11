@@ -11,9 +11,9 @@ from scipy import ndimage
 import subprocess
 import warnings
 
-from binaryspectra import base_spectrum
-from binaryspectra import spectra
-from binaryspectra import utils
+from . import base_spectrum
+from . import spectra
+from . import utils
 
 import sys
 sys.path.append(os.environ['ISPEC_DIR'])

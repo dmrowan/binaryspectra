@@ -17,9 +17,9 @@ from ispec.lines import __model_velocity_profile as model_velocity_profile
 from ispec.modeling.mpfitmodels import GaussianModel
 from ispec.common import find_local_min_values, find_local_max_values
 
-from binaryspectra import plotutils, utils
-from binaryspectra import measure_rvs
-from binaryspectra import spectrum_utils
+from . import plotutils, utils
+from . import measure_rvs
+from . import spectrum_utils
 
 #Dom Rowan 2024
 

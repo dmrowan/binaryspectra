@@ -17,8 +17,8 @@ from specutils.fitting import fit_generic_continuum
 from tqdm import tqdm
 import warnings
 
-from binaryspectra.base_spectrum import *
-from binaryspectra import utils, spectrum_utils, plotutils
+from .base_spectrum import *
+from . import utils, spectrum_utils, plotutils
 
 #Dom Rowan 2024
 

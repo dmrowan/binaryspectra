@@ -22,12 +22,12 @@ import specmatchemp.plots as smplot
 from specmatchemp import spectrum
 from specmatchemp.specmatch import SpecMatch
 
-from binaryspectra import plotutils
-from binaryspectra import spectrum_utils
-from binaryspectra import utils
-from binaryspectra import measure_rvs
-from binaryspectra import rotbroadint
-from binaryspectra import profiles
+from . import plotutils
+from . import spectrum_utils
+from . import utils
+from . import measure_rvs
+from . import rotbroadint
+from . import profiles
 
 import sys
 sys.path.append(os.environ['ISPEC_DIR'])

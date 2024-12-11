@@ -391,7 +391,7 @@ class ASPCAPspec(EchelleSpectrum):
 
         self.Orders = []
         for i, dfi in enumerate([dfa, dfb, dfc]):
-            self.Orders.append(spectra.EchelleOrder(i, dfi.wavelength.values, dfi.flux.values))
+            self.Orders.append(EchelleOrder(i, dfi.wavelength.values, dfi.flux.values))
 
         for Order in self.Orders:
             Order.flux_filter(1.2)
@@ -408,7 +408,7 @@ class ASPCAPspec(EchelleSpectrum):
         self.params['logg'] = r['logg']
         self.params['mh'] = r['__M_H_']
 
-class GALAHspec(spectra.EchelleSpectrum):
+class GALAHspec(EchelleSpectrum):
     '''
     GALAH DR3
     '''
@@ -436,7 +436,7 @@ class GALAHspec(spectra.EchelleSpectrum):
             yvals = hdul[0].data
             xvals = val1 + np.arange(len(yvals))*val2
 
-            spec = spectra.EchelleOrder(band, xvals, yvals)
+            spec = EchelleOrder(band, xvals, yvals)
             orders.append(spec)
 
         self.header = header
@@ -444,7 +444,7 @@ class GALAHspec(spectra.EchelleSpectrum):
         self.wavelength_unit = u.AA
         self.flux_unit = u.dimensionless_unscaled
 
-class LAMOSTMRSspec(spectra.EchelleSpectrum):
+class LAMOSTMRSspec(EchelleSpectrum):
     
     '''
     LAMOST medium resolution survey (DR8)
@@ -476,14 +476,14 @@ class LAMOSTMRSspec(spectra.EchelleSpectrum):
 
         if i_coadd_b is not None:
             data_b = hdul[i_coadd_b].data
-            spec_b = spectra.EchelleOrder('B',
+            spec_b = EchelleOrder('B',
                                           data_b['WAVELENGTH'].reshape(-1).byteswap().newbyteorder(),
                                           data_b['FLUX'].reshape(-1).byteswap().newbyteorder())
             spec_b.trim_edges(5)
             spec_b.fit_continuum()
         if i_coadd_r is not None:
             data_r = hdul[i_coadd_r].data
-            spec_r = spectra.EchelleOrder('R', data_r['WAVELENGTH'].reshape(-1).byteswap().newbyteorder(),
+            spec_r = EchelleOrder('R', data_r['WAVELENGTH'].reshape(-1).byteswap().newbyteorder(),
                                           data_r['FLUX'].reshape(-1).byteswap().newbyteorder())
             spec_r.trim_edges(5)
             spec_r.fit_continuum()

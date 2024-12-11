@@ -77,11 +77,13 @@ class SpectroscopicBinary:
 
     def _load_pepsi_spectra(self, skip_files=None, **kwargs):
 
-        pepsi_fnames = spectrum_utils.organize_pepsi_files(self.spectra_dir, skip_files=skip_files)
+        pepsi_fnames = spectrum_utils.organize_pepsi_files(
+                self.spectra_dir, skip_files=skip_files)
         if pepsi_fnames is None:
             self.pepsi_spectra = []
         else:
-            self.pepsi_spectra = [ spectra.PEPSIspec(f, **kwargs) for f in pepsi_fnames ]
+            self.pepsi_spectra = [ spectra.PEPSIspec(f, **kwargs) 
+                                   for f in pepsi_fnames ]
 
     def _load_apf_spectra(self, skip_files=None, **kwargs):
 
@@ -92,20 +94,25 @@ class SpectroscopicBinary:
                           (f.endswith('.fits')) ]
 
         if skip_files is not None:
-            apf_fnames = [ f for f in apf_fnames if os.path.split(f)[-1] not in skip_files ]
+            apf_fnames = [ f for f in apf_fnames 
+                           if os.path.split(f)[-1] not in skip_files ]
 
         if len(apf_fnames) < 4:
-            self.apf_spectra = [ spectra.APFspec(f, **kwargs) for f in tqdm(apf_fnames) ]
+            self.apf_spectra = [ spectra.APFspec(f, **kwargs) 
+                                 for f in tqdm(apf_fnames) ]
         else:
             num_processes = np.min([8, len(apf_fnames)//2])
             chunks = [ apf_fnames[i:i+len(apf_fnames)//num_processes]
-                       for i in range(0, len(apf_fnames), len(apf_fnames)//num_processes) ]
+                       for i in range(0, len(apf_fnames), 
+                                      len(apf_fnames)//num_processes) ]
 
             with mp.Pool(processes=num_processes) as pool:
-                results = pool.map(partial(spectrum_utils.process_apf_chunk, **kwargs), 
-                                   chunks)
+                results = pool.map(
+                        partial(spectrum_utils.process_apf_chunk, **kwargs),
+                        chunks)
 
-            self.apf_spectra = [ item for sublist in results for item in sublist ]
+            self.apf_spectra = [ item for sublist in results 
+                                 for item in sublist ]
 
 
     def _load_chiron_spectra(self, skip_files=None, **kwargs):
@@ -115,15 +122,19 @@ class SpectroscopicBinary:
                          if f.startswith('achi') ]
 
         if skip_files is not None:
-            chiron_fnames = [ f for f in chiron_fnames if os.path.split(f)[-1] not in skip_files ]
+            chiron_fnames = [ f for f in chiron_fnames 
+                              if os.path.split(f)[-1] not in skip_files ]
 
-        self.chiron_spectra = [ spectra.CHIRONspec(f, **kwargs) for f in chiron_fnames ]
+        self.chiron_spectra = [ spectra.CHIRONspec(f, **kwargs) 
+                                for f in chiron_fnames ]
 
     @property
     def spectra(self):
         
         try:
-            all_spectra = self.pepsi_spectra + self.apf_spectra + self.chiron_spectra
+            all_spectra = (self.pepsi_spectra + 
+                           self.apf_spectra + 
+                           self.chiron_spectra)
             all_jds = [ spec.JD for spec in all_spectra ]
             spectra = [ spec for _,spec in sorted(zip(all_jds, all_spectra)) ]
             return spectra
@@ -141,7 +152,8 @@ class SpectroscopicBinary:
         try:
             all_echelle_spectra = self.apf_spectra + self.chiron_spectra
             all_jds = [ spec.JD for spec in all_echelle_spectra ]
-            spectra = [ spec for _,spec in sorted(zip(all_jds, all_echelle_spectra)) ]
+            spectra = [ spec for _,spec in sorted(zip(all_jds, 
+                                                      all_echelle_spectra)) ]
             return spectra
         except:
             return []
@@ -205,10 +217,12 @@ class SpectroscopicBinary:
             self.df_rv = pd.read_csv(fname)
         self.instrument_list = self.df_rv.Instrument.value_counts().index
 
-    def plot_rv_orbit_broken(self, fig=None, gs=None, savefig=None, gap=5, **kwargs):
+    def plot_rv_orbit_broken(self, fig=None, gs=None, 
+                             savefig=None, gap=5, **kwargs):
         
         #Determine breaks
-        df_rv = self.df_rv.copy().sort_values(by='JD', ascending=True).reset_index(drop=True)
+        df_rv = self.df_rv.copy().sort_values(by='JD', ascending=True)
+        df_rv = df_rv.reset_index(drop=True)
         df_rv['gap'] = np.concatenate([np.zeros(1), np.diff(df_rv.JD)])
 
         #Period to use for break selection
@@ -226,7 +240,8 @@ class SpectroscopicBinary:
 
             #Now get xlims from split dfs
             for i in range(len(df_split)):
-                xlims.append( (df_split[i].JD.min()-period*0.25, df_split[i].JD.max()+period*0.25))
+                xlims.append( (df_split[i].JD.min()-period*0.25, 
+                               df_split[i].JD.max()+period*0.25))
         else:
             ax = fig.add_subplot(gs)
             return self.plot_rv_orbit(ax=ax, **kwargs)
@@ -242,7 +257,8 @@ class SpectroscopicBinary:
 
         else:
             created_fig = False
-            bax = brokenaxes.brokenaxes(fig=fig, subplot_spec=gs, xlims=xlims, despine=False)
+            bax = brokenaxes.brokenaxes(fig=fig, subplot_spec=gs, 
+                                        xlims=xlims, despine=False)
             bax = self.plot_rv_orbit(ax=bax, **kwargs)
 
         if created_fig:
@@ -276,7 +292,9 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         instruments = []
         specs = []
 
-        spec_lists = [self.pepsi_spectra, self.apf_spectra, self.chiron_spectra]
+        spec_lists = [self.pepsi_spectra, 
+                      self.apf_spectra, 
+                      self.chiron_spectra]
         instrument_list = ['PEPSI', 'APF', 'CHIRON']
 
         for spec_list, instrument in zip(spec_list, instrument_list):
@@ -307,7 +325,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         self.instrument_list = self.df_rv.Instrument.value_counts().index
 
 
-    def plot_rvs(self, ax=None, savefig=None, markers_dict=None, plot_kwargs=None):
+    def plot_rvs(self, ax=None, savefig=None, 
+                 markers_dict=None, plot_kwargs=None):
 
         fig, ax, created_fig = plotutils.fig_init(ax, figsize=(10, 6))
 
@@ -333,7 +352,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
 
-    def fit_rvs(self, guess, niters=50000, burnin=10000, idx_mask=None, **lnprob_kwargs):
+    def fit_rvs(self, guess, niters=50000, burnin=10000,
+                idx_mask=None, **lnprob_kwargs):
 
         '''
         Fit RV model 
@@ -377,7 +397,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         samples = sampler.get_chain(discard=burnin, flat=True)
         rv_samples =pd.DataFrame(samples)
         columns = ['K1', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs']
-        columns = columns + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
+        columns = columns + [ f'rv_offset_{i}' 
+                              for i in range(len(self.instrument_list)-1) ]
         rv_samples.columns = columns
         rv_samples['T0'] = rv_samples.M0 * rv_samples.period / (2*np.pi)
         self.rv_samples = rv_samples
@@ -389,7 +410,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                 e=self.rv_samples.ecc.to_numpy()).value
 
 
-    def plot_rv_corner(self, savefig=None, figsize=None, offset_numeric_label=True):
+    def plot_rv_corner(self, savefig=None, figsize=None, 
+                       offset_numeric_label=True):
 
         if not hasattr(self, 'rv_samples'):
             raise ValueError('RV orbit must be fit first')
@@ -416,7 +438,9 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             if offset_numeric_label:
                 labels.append(r'$\delta\rm{RV}_{'+str(i)+r'}\ \rm{[km/s]}$')
             else:
-                labels.append(r'$\delta\rm{RV}_{\textnormal{\small '+instrument+r'}}\ \rm{[km/s]}$')
+                labels.append((r'$\delta\rm{RV}_{\textnormal{\small '+
+                               instrument+
+                               r'}}\ \rm{[km/s]}$'))
 
             units.append(r'$\rm{(km/s)}$')
 
@@ -424,7 +448,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             n = len(labels)+4
             figsize=(n,n)
 
-        fig, ax = plt.subplots(samples.shape[1], samples.shape[1], figsize=figsize)
+        fig, ax = plt.subplots(samples.shape[1], samples.shape[1], 
+                               figsize=figsize)
 
         fig = corner.corner(samples, labels=labels, fig=fig,
                             hist_kwargs=dict(lw=3, color='black'),
@@ -444,7 +469,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             lower_err = med_val - lower
             upper_err = upper - med_val
 
-            title = utils.round_val_err(med_val, lower_err, upper_err) + ' ' + units[i]
+            title = utils.round_val_err(
+                    med_val, lower_err, upper_err) + ' ' + units[i]
 
             ax[i,i].set_title(title, fontsize=12)
 
@@ -478,7 +504,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         for instrument, offset in zip(self.instrument_list, rv_offsets):
             
-            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & (self.df_rv.mask_rv == 0)]
+            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & 
+                                 (self.df_rv.mask_rv == 0)]
             df_plot_masked = self.df_rv[(self.df_rv.Instrument == instrument) &
                                         (self.df_rv.mask_rv == 1)]
 
@@ -504,7 +531,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                     np.random.randint(0, len(self.rv_samples_sb1))].to_numpy()
             K1, gamma, phi0, ecc, omega, period = sample[:6]
 
-            model1 = rv_orbit_fitter.rv_model(tvals, K1, gamma, phi0, ecc, omega, period)
+            model1 = rv_orbit_fitter.rv_model(
+                    tvals, K1, gamma, phi0, ecc, omega, period)
 
             ax.plot(tvals, model1, color='xkcd:red', lw=1, alpha=0.2, zorder=1)
 
@@ -598,7 +626,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         return self.rv_chi2_nu, self.rv_chi2_nu_jitter
 
     def plot_rv_residuals(self, with_jitter=False, plot_masked=True,
-                          ax=None, savefig=None, legend=False, legend_kwargs=none,
+                          ax=None, savefig=None, legend=False, legend_kwargs=None,
                           markers_dict=None,
                           plot_kwargs=None,
                           label_chi2=True):
@@ -627,7 +655,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         for instrument in self.instrument_list:
 
-            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & (self.df_rv.mask_rv == 0)]
+            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & 
+                                 (self.df_rv.mask_rv == 0)]
             df_plot_masked = self.df_rv[(self.df_rv.Instrument == instrument) &
                                         (self.df_rv.mask_rv == 1)]
 
@@ -670,7 +699,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                 chi2_val = self.rv_chi2_nu
 
             label = r'$\chi^2_{\nu} = '+f'{chi2_val:.2f}'+r'$'
-            ax.text(.95, .95, label, ha='right', va='top', fontsize=15, transform=ax.transAxes)
+            ax.text(.95, .95, label, ha='right', va='top', 
+                    fontsize=15, transform=ax.transAxes)
 
     def get_quadrature_spec(self):
         
@@ -705,7 +735,9 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         assert(method in ['todcor', 'ccf'])
 
-        spec_lists = [self.pepsi_spectra, self.apf_spectra, self.chiron_spectra]
+        spec_lists = [self.pepsi_spectra, 
+                      self.apf_spectra, 
+                      self.chiron_spectra]
         instrument_list = ['PEPSI', 'APF', 'CHIRON']
         for spec_list, instrument in zip(spec_lists, instrument_list):
             for spec in spec_list:
@@ -794,7 +826,8 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
                 else:
                     idx_to_flip.append(i)
             else:
-                raise ValueError(f'invalid max RV component {which_rv_higher[i]}')
+                raise ValueError(
+                        f'invalid max RV component {which_rv_higher[i]}')
 
         self.flip_rv(idx_to_flip)
 
@@ -821,7 +854,8 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
-    def fit_rvs(self, guess, niters=50000, burnin=10000, idx_mask=None, **lnprob_kwargs):
+    def fit_rvs(self, guess, niters=50000, burnin=10000, 
+                idx_mask=None, **lnprob_kwargs):
         
         K1, K2, gamma, M0, ecc, omega, period = guess
 
@@ -892,8 +926,9 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         samples = samples.drop(columns=['T0'], errors='ignore')
 
 
-        labels = [r'$K_1\ \rm{(km/s)}$', r'$K_2\ \rm{(km/s)}$', r'$\gamma\ \rm{(km/s)}$', 
-                  r'$T_0$', 'Ecc', r'$\omega\ (\rm{rad})$', r'$P \rm{(d)}$',
+        labels = [r'$K_1\ \rm{(km/s)}$', r'$K_2\ \rm{(km/s)}$', 
+                  r'$\gamma\ \rm{(km/s)}$', r'$T_0$', 'Ecc', 
+                  r'$\omega\ (\rm{rad})$', r'$P \rm{(d)}$',
                   r'$\log s_1$', '$\log s_2$']
 
         units = [r'$\rm{(km/s)}$', r'$\rm{(km/s)}$', r'$\rm{(km/s)}$',
@@ -962,7 +997,8 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         handles = []
         for instrument, offset in zip(self.instrument_list, rv_offsets):
             
-            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & (self.df_rv.mask_rv == 0)]
+            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & 
+                                 (self.df_rv.mask_rv == 0)]
             df_plot_masked = self.df_rv[(self.df_rv.Instrument == instrument) & 
                                         (self.df_rv.mask_rv == 1)]
 
@@ -1000,8 +1036,10 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
             sample = self.rv_samples.iloc[np.random.randint(0, len(self.rv_samples))].to_numpy()
             K1, K2, gamma, phi0, ecc, omega, period = sample[:7]
 
-            model1 = rv_orbit_fitter.rv_model(tvals, K1, gamma, phi0, ecc, omega, period)
-            model2 = rv_orbit_fitter.rv_model(tvals, -1*K2, gamma, phi0, ecc, omega, period)
+            model1 = rv_orbit_fitter.rv_model(
+                    tvals, K1, gamma, phi0, ecc, omega, period)
+            model2 = rv_orbit_fitter.rv_model(
+                    tvals, -1*K2, gamma, phi0, ecc, omega, period)
 
             ax.plot(tvals, model1, color='black', lw=1, alpha=0.2, zorder=1)
             ax.plot(tvals, model2, color='xkcd:red', lw=1, alpha=0.2, zorder=1)
@@ -1132,7 +1170,7 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
     def plot_rv_residuals(self, with_jitter=False, plot_masked=True,
                           ax=None, savefig=None, legend=False, legend_kwargs=None,
-                          label_chi2=True):
+                          markers_dict=None, label_chi2=True):
 
         if 'residual_1' not in self.df_rv.columns:
             self.calculate_rv_residuals()
@@ -1146,33 +1184,42 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         else:
             yerr_columns = ('RV1_err', 'RV2_err')
 
+        if markers_dict is None:
+            markers_dict = plotutils.create_markers_dict(self.instrument_list)
+
         handles = []
         for instrument in self.instrument_list:
 
-            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & (self.df_rv.mask_rv == 0)]
+            df_plot = self.df_rv[(self.df_rv.Instrument == instrument) & 
+                                 (self.df_rv.mask_rv == 0)]
             df_plot_masked = self.df_rv[(self.df_rv.Instrument == instrument) & 
                                         (self.df_rv.mask_rv == 1)]
             
-            e1 = ax.errorbar(df_plot.JD, df_plot.residual_1, yerr=df_plot[yerr_columns[0]],
-                        color='black', marker=markers[instrument],
-                        ls='')
+            e1 = ax.errorbar(df_plot.JD, df_plot.residual_1, 
+                             yerr=df_plot[yerr_columns[0]],
+                             color='black', marker=markers_dict[instrument],
+                             ls='')
 
-            e2 = ax.errorbar(df_plot.JD, df_plot.residual_2, yerr=df_plot[yerr_columns[1]],
-                        color='xkcd:red', marker=markers[instrument],
-                        ls='')
+            e2 = ax.errorbar(df_plot.JD, df_plot.residual_2, 
+                             yerr=df_plot[yerr_columns[1]],
+                             color='xkcd:red', marker=markers_dict[instrument],
+                             ls='')
 
             handles.append((e1, e2))
 
             if len(df_plot_masked) and plot_masked:
 
-                ax.errorbar(df_plot_masked.JD, df_plot_masked.residual_1, yerr=df_plot_masked[yerr_columns[0]],
-                            color='black', marker=markers[instrument], markeredgecolor='none',
+                ax.errorbar(df_plot_masked.JD, df_plot_masked.residual_1, 
+                            yerr=df_plot_masked[yerr_columns[0]],
+                            color='black', marker=markers_dict[instrument], 
+                            markeredgecolor='none',
                             ls='', alpha=0.3)
 
-                ax.errorbar(df_plot_masked.JD, df_plot_masked.residual_2, yerr=df_plot_masked[yerr_columns[1]],
-                            color='xkcd:red', marker=markers[instrument], markeredgecolor='none',
+                ax.errorbar(df_plot_masked.JD, df_plot_masked.residual_2, 
+                            yerr=df_plot_masked[yerr_columns[1]],
+                            color='xkcd:red', marker=markers_dict[instrument], 
+                            markeredgecolor='none',
                             ls='', alpha=0.3)
-
 
         ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
         ax.set_ylabel(r'Residuals (km/s)', fontsize=20)
@@ -1205,7 +1252,8 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
             label += r'$\chi^2_{\nu,2} = '+str(round(chi2_vals[1],2))+r'$'
 
             ax.text(.95, .95, label,
-                    ha='right', va='top', fontsize=15, transform=ax.transAxes)
+                    ha='right', va='top', 
+                    fontsize=15, transform=ax.transAxes)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
@@ -1242,11 +1290,14 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         for i in range(len(echelle_orders)):
 
             wmins.append(np.max([
-                    spec.Orders[i].df.wavelength.min() for spec in self.echelle_spectra]))
+                    spec.Orders[i].df.wavelength.min() 
+                    for spec in self.echelle_spectra]))
             wmaxs.append(np.min([
-                    spec.Orders[i].df.wavelength.max() for spec in self.echelle_spectra]))
+                    spec.Orders[i].df.wavelength.max() 
+                    for spec in self.echelle_spectra]))
             dlambdas.append(np.max([
-                    spec.Orders[i].get_wavelength_spacing() for spec in self.echelle_spectra]))
+                    spec.Orders[i].get_wavelength_spacing() 
+                    for spec in self.echelle_spectra]))
 
         if dont_resample:
             pass
@@ -1416,22 +1467,22 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
             if use_mp:
                 job = pool.apply_async(
-                        spectrum_utils.fd3_worker, (fd3_path, input_fnames[i],),
+                        spectrum_utils.fd3_worker, 
+                        (fd3_path, input_fnames[i],),
                         callback=callback)
                 jobs.append(job)
             else:
-                spectrum_utils.fd3_worker(fd3_path, input_fnames[i], verbose=self.verbose)
+                spectrum_utils.fd3_worker(fd3_path, input_fnames[i], 
+                                          verbose=self.verbose)
 
         if use_mp:
             for job in jobs:
                 job.get()
                 
         #Create FDBinaryResult object
-        self.fdbinary = fdbinary.FDBinaryResult(input_fnames, verbose=self.verbose,
-                                                flux_ratio=alpha)
+        self.fdbinary = fdbinary.FDBinaryResult(
+                input_fnames, verbose=self.verbose,
+                flux_ratio=alpha)
         if cleanup:
             self.fdbinary.cleanup()
-
-
-
 

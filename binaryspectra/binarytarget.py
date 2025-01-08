@@ -297,7 +297,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                       self.chiron_spectra]
         instrument_list = ['PEPSI', 'APF', 'CHIRON']
 
-        for spec_list, instrument in zip(spec_list, instrument_list):
+        for spec_list, instrument in zip(spec_lists, instrument_list):
             
             for spec in spec_list:
                 

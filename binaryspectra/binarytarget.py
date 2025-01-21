@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 from matplotlib import rc
 from matplotlib.legend_handler import HandlerTuple
 import multiprocessing as mp
+from numba import typed
+from numba.types import unicode_type, float64
 import numpy as np
 import os
 import pandas as pd
@@ -63,9 +65,13 @@ class SpectroscopicBinary:
         else:
             raise FileNotFoundError(f'Spectra dir not found {value}')
 
-    def load_spectra(self, spectra_dir, skip_files=None):
+    def load_spectra(self, spectra_dir=None, skip_files=None):
 
-        self.spectra_dir = spectra_dir
+        if spectra_dir is not None:
+            self.spectra_dir = spectra_dir
+
+        if self.spectra_dir is None:
+            raise ValueError('Spectra dir must be defined first')
 
         if skip_files is not None:
             if not utils.check_iter(skip_files):
@@ -97,22 +103,25 @@ class SpectroscopicBinary:
             apf_fnames = [ f for f in apf_fnames 
                            if os.path.split(f)[-1] not in skip_files ]
 
-        if len(apf_fnames) < 4:
-            self.apf_spectra = [ spectra.APFspec(f, **kwargs) 
-                                 for f in tqdm(apf_fnames) ]
+        if len(apf_fnames):
+            if len(apf_fnames) < 4:
+                self.apf_spectra = [ spectra.APFspec(f, **kwargs) 
+                                     for f in tqdm(apf_fnames) ]
+            else:
+                num_processes = np.min([8, len(apf_fnames)//2])
+                chunks = [ apf_fnames[i:i+len(apf_fnames)//num_processes]
+                           for i in range(0, len(apf_fnames), 
+                                          len(apf_fnames)//num_processes) ]
+
+                with mp.Pool(processes=num_processes) as pool:
+                    results = pool.map(
+                            partial(spectrum_utils.process_apf_chunk, **kwargs),
+                            chunks)
+
+                self.apf_spectra = [ item for sublist in results 
+                                     for item in sublist ]
         else:
-            num_processes = np.min([8, len(apf_fnames)//2])
-            chunks = [ apf_fnames[i:i+len(apf_fnames)//num_processes]
-                       for i in range(0, len(apf_fnames), 
-                                      len(apf_fnames)//num_processes) ]
-
-            with mp.Pool(processes=num_processes) as pool:
-                results = pool.map(
-                        partial(spectrum_utils.process_apf_chunk, **kwargs),
-                        chunks)
-
-            self.apf_spectra = [ item for sublist in results 
-                                 for item in sublist ]
+            self.apf_spectra = []
 
 
     def _load_chiron_spectra(self, skip_files=None, **kwargs):
@@ -283,6 +292,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         for i, spec in tqdm(enumerate(self.spectra)):
             spec.cross_correlation(template)
             spec.ccf.model()
+        self.verbose = current_verbose
 
     def build_rv_table(self):
 
@@ -359,7 +369,26 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         Fit RV model 
         '''
 
-        K1, gamma, M0, ecc, omega, period = guess
+        if guess == 'Gaia':
+            gaia_orbit = utils.query_gaia_orbit(self.name)
+            period = gaia_orbit['Per']
+            K1 = gaia_orbit['K1']
+            gamma = gaia_orbit['Vcm']
+            ecc = gaia_orbit['ecc']
+            omega = gaia_orbit['omega']*np.pi/180
+            M0 = np.pi #temp
+
+            #Convert the gaia orbit dict to numba typed dictionary
+            numba_dict = typed.Dict.empty(key_type=unicode_type, value_type=float64)
+            for k, v in gaia_orbit.items():
+                if k == 'Source':
+                    continue
+                else:
+                    numba_dict[k] = v
+
+        else:
+            K1, gamma, M0, ecc, omega, period = guess
+
         pos = [K1, gamma, M0, ecc, omega, period, -5]
         pos = pos + [ 0 for i in range(len(self.instrument_list)-1) ]
 
@@ -385,8 +414,11 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                                    (self.df_rv.mask_rv == 0)].RV1_err.values
                         for instrument in self.instrument_list ]))
 
-        lnprob_kwargs.setdefault('period_mu', period)
-        lnprob_kwargs.setdefault('period_sigma', period*0.1)
+        if guess == 'Gaia':
+            lnprob_kwargs['gaia_dict'] = numba_dict
+        else:
+            lnprob_kwargs.setdefault('period_mu', period)
+            lnprob_kwargs.setdefault('period_sigma', period*0.1)
 
         sampler = emcee.EnsembleSampler(
                 nwalkers, ndim, rv_orbit_fitter.lnprob_sb1,
@@ -406,11 +438,11 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         #Add mass function column
         self.rv_samples['fM'] = utils.mass_function(
                 self.rv_samples.period.to_numpy()*u.day,
-                np.abs(self.rv_samples.K.to_numpy())*u.km/u.s,
+                np.abs(self.rv_samples.K1.to_numpy())*u.km/u.s,
                 e=self.rv_samples.ecc.to_numpy()).value
 
-
     def plot_rv_corner(self, savefig=None, figsize=None, 
+                       gaia_priors=False,
                        offset_numeric_label=True):
 
         if not hasattr(self, 'rv_samples'):
@@ -418,7 +450,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         samples = self.rv_samples.copy()
         samples['M0'] = samples.T0.values
-        samples = samples.drop(columns=['T0'], errors='ignore')
+        samples = samples.drop(columns=['T0', 'fM'], errors='ignore')
 
         labels = [r'$K_1\ \rm{[km/s]}$', r'$\gamma\ \rm{[km/s]}$', 
                   r'$T_0\ \rm{[d]}$',
@@ -459,6 +491,25 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         for a in ax.reshape(-1):
             a = plotutils.plotparams(a)
 
+        if gaia_priors:
+            gaia_dict = utils.query_gaia_orbit(self.name)
+
+            keys = {'Per':'period', 
+                    'ecc':'ecc', 
+                    'Vcm': 'gamma', 
+                    'K1':'K1', 
+                    'omega': 'omega'}
+
+            for k in keys.keys():
+                
+                samples_key = keys[k]
+                mu = gaia_dict[k]
+                emu = gaia_dict[f'e_{k}']
+
+                idx = np.where(np.asarray(samples.columns) == samples_key)[0][0]
+                random_samples = np.random.normal(loc=mu, scale=emu, size=len(samples))
+                ax[idx,idx].hist(random_samples, histtype='step', color='xkcd:red', bins=20, lw=2, ls='--')
+
         #Set titles
         for i in range(samples.shape[1]):
             
@@ -479,8 +530,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         else:
             fig.savefig(savefig)
 
-    def plot_rv_orbit(self, ax=None, savefig=None, legend=False,
-                      markers_dict=None):
+    def plot_rv_orbit(self, ax=None, savefig=None, legend=False, legend_kwargs=None,
+                      markers_dict=None, tmin=None, tmax=None):
         
         if not hasattr(self, 'rv_samples'):
             raise ValueError('RV orbit must be fit first')
@@ -493,8 +544,11 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         if created_fig:
             fig.subplots_adjust(top=.98, right=.98)
 
-        tvals = np.linspace(self.df_rv.JD.min()-10, self.df_rv.JD.max()+10,
-                            int(1e4))
+        if tmin is None:
+            tmin = self.df_rv.JD.min()-10
+        if tmax is None:
+            tmax = self.df_rv.JD.max()+10
+        tvals = np.linspace(tmin, tmax, int(1e4))
 
         rv_offsets = [0] + [ self.rv_samples[f'rv_offset_{i-1}'].median()
                              for i in range(1, len(self.instrument_list)) ]
@@ -528,7 +582,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         for i in range(100):
             
             sample = self.rv_samples.iloc[
-                    np.random.randint(0, len(self.rv_samples_sb1))].to_numpy()
+                    np.random.randint(0, len(self.rv_samples))].to_numpy()
             K1, gamma, phi0, ecc, omega, period = sample[:6]
 
             model1 = rv_orbit_fitter.rv_model(
@@ -568,8 +622,9 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
                 axs.legend(handles, self.instrument_list,
                            **legend_kwargs)
-        else:
-            ax.legend(**legend_kwargs)
+
+            else:
+                ax.legend(**legend_kwargs)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 

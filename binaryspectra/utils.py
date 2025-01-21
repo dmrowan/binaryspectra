@@ -7,6 +7,7 @@ from astropy import constants as const
 from astropy.coordinates import SkyCoord, EarthLocation
 from astropy import units as u
 from astropy.time import Time
+from astroquery.vizier import Vizier
 from datetime import datetime
 from math import log10, floor
 import numpy as np
@@ -125,13 +126,10 @@ def mass_function(P, K, e=0):
     #f *= (1-e**2)**(3/2)
     return f.to('M_sun')
 
-def companion_mass(f, Mstar, inc, verbose=True):
+def companion_mass(f, Mstar, inc):
         
-    if inc > 2*np.pi: 
-        if verbose:
-            log.info('Using inclination in degrees')
-        #convert to radians
-        inc = inc*np.pi/180
+    #convert to radians
+    inc = inc*np.pi/180
 
     f = f.to('Msun').value
     Mstar = Mstar.to('Msun').value
@@ -293,6 +291,28 @@ def t0_perpass_to_infconj(t0_perpass, period, ecc, per0):
 
     return t0_perpass + _delta_t_infconj_perpass(period, ecc, per0)
 
+def query_gaia_orbit(source, catalog='I/357/tbosb1'):
+
+    if catalog == 'I/357/tbosb1':
+        vizier_columns = ['Source', 'Per', 'e_Per', 'Tperi', 'e_Tperi', 
+                          'ecc', 'e_ecc', 'Vcm', 'e_Vcm', 'K1', 'e_K1',
+                          'omega', 'e_omega']
+    else:
+        raise NotImplementedError('Only SB1 catalog available')
+
+    r = Vizier(catalog=catalog, columns=vizier_columns).query_constraints(
+            Source=str(source))[0]
+
+    r = r.to_pandas().iloc[0].to_dict()
+    r['Source'] = source
+
+    #Convert omega to be from -pi to pi
+    if r['omega'] > 180:
+        r['omega'] = r['omega'] - 360
+    r['omega'] = r['omega'] * np.pi/180
+    r['e_omega'] = r['e_omega'] * np.pi/180
+
+    return r
 
 
 

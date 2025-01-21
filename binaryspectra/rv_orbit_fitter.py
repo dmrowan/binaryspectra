@@ -196,6 +196,51 @@ def lnprior_sb1(theta, t, period_mu=None, period_sigma=None, ecc_max=None, perio
             return -np.inf
 
 @numba.jit(nopython=True)
+def lnprior_sb1_gaia(theta, t, gaia_dict, ecc_max=None, period_max=3000):
+
+    K1, gamma, phi0, ecc, omega, period, logs = theta[:7]
+    rvoffsets = theta[7:]
+
+    if np.any(np.isinf(theta)):
+        return -np.inf
+
+    K_condition = (K1 > 0)
+    gamma_condition = True
+    phi_condition = 0 <= phi0 <= 2*np.pi
+
+    if ecc_max is None:
+        ecc_condition = 0 <= ecc <= 0.9
+    else:
+        ecc_condition = 0 <= ecc <= ecc_max
+    omega_condition = -1*np.pi <= omega <= np.pi
+
+    period_condition = 0.5 <= period <= period_max
+
+    logs_condition = -10 < logs < 0
+
+    conditions = [K_condition, gamma_condition, phi_condition, ecc_condition,
+                  omega_condition, period_condition, logs_condition]
+
+    if not np.all(np.array(conditions)):
+        return -np.inf
+
+    lp = 0
+    if len(rvoffsets):
+        for rvo in rvoffsets:
+            conditions.append( -5 <= rvo <= 5 )
+            lp += -0.5*((rvo)/1.5)**2
+
+    #Gaia priors
+    lp += -0.5*((period-gaia_dict['Per'])/gaia_dict['e_Per'])**2
+    lp += -0.5*((ecc-gaia_dict['ecc'])/gaia_dict['e_ecc'])**2
+    lp += -0.5*((gamma-gaia_dict['Vcm'])/gaia_dict['e_Vcm'])**2
+    lp += -0.5*((K1-gaia_dict['K1'])/gaia_dict['e_K1'])**2
+    lp += -0.5*((omega-gaia_dict['omega'])/gaia_dict['e_omega'])**2
+
+    return lp
+
+
+@numba.jit(nopython=True)
 def lnprior_sb2(theta, t, period_mu=None, period_sigma=None, ecc_max=None, period_max=3000):
 
     K1, K2, gamma, phi0, ecc, omega, period, logs1, logs2 = theta[:9]
@@ -240,10 +285,13 @@ def lnprior_sb2(theta, t, period_mu=None, period_sigma=None, ecc_max=None, perio
 
 @numba.jit(nopython=True)
 def lnprob_sb1(theta, t, rv1, rv_err1, 
-               period_mu=None, period_sigma=None, ecc_max=None, period_max=3000):
+               period_mu=None, period_sigma=None, ecc_max=None, period_max=3000, gaia_dict=None):
 
-    lp = lnprior_sb1(theta, t, period_mu=period_mu, period_sigma=period_sigma, ecc_max=ecc_max,
-                 period_max=period_max)
+    if gaia_dict is None:
+        lp = lnprior_sb1(theta, t, period_mu=period_mu, period_sigma=period_sigma, ecc_max=ecc_max,
+                     period_max=period_max)
+    else:
+        lp = lnprior_sb1_gaia(theta, t, gaia_dict, ecc_max=ecc_max, period_max=period_max)
 
     if np.isinf(lp):
         return -np.inf

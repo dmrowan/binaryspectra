@@ -551,6 +551,7 @@ class GaiaXPspec(GaiaSpec):
         xp_spec_result['flux_err']=xp_spec_result['e_Flux']
         xp_spec_result=xp_spec_result.loc[xp_spec_result['Source']==source]
         self.df = xp_spec_result[['wavelength', 'flux', 'flux_err']].reset_index(drop=True)
+        self.df = self.df.sort_values(by='wavelength', ascending=True).reset_index(drop=True)
 
         self.header = {}
         self.Source = source

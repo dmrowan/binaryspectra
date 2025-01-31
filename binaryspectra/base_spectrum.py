@@ -69,6 +69,8 @@ class BaseSpectrum:
 
         self.fdbinary_mask = False
 
+        self.continuum_regions = []
+
     @property
     def verbose(self):
         return self._verbose
@@ -327,6 +329,66 @@ class BaseSpectrum:
             self.df['flux'] = flux
             self.df['err'] = err
 
+    def add_continuum_region(self, regions):
+       
+        if isinstance(regions[0], (int, float)):
+            regions = [regions]
+
+        self.continuum_regions.extend(regions)
+
+        self.continuum_regions.sort(key=lambda region: region[0])
+
+
+        merged_regions = []
+        for region in self.continuum_regions:
+            if not merged_regions or merged_regions[-1][1] < region[0]:
+                merged_regions.append(region)
+            else:
+                merged_regions[-1][1] = max(merged_regions[-1][1], region[1])
+        self.continuum_regions = merged_regions
+
+    def fit_continuum_regions(self, degree, plot=False, ax=None, savefig=None):
+
+        wavelength = self.df.wavelength.values
+        allflux = self.df.flux.values
+        flux = self.df.flux.values
+
+        if len(self.continuum_regions):
+            idx = np.where( (self.df.wavelength > self.continuum_regions[0][0]) &
+                            (self.df.wavelength < self.continuum_regions[0][1]) )[0]
+            for i in range(1, len(self.continuum_regions)):
+                idxi = np.where( (self.df.wavelength > self.continuum_regions[i][0]) &
+                                 (self.df.wavelength < self.continuum_regions[i][1]) )[0]
+                idx = np.concatenate([idx, idxi])
+            wavelength = wavelength[idx]
+            flux = flux[idx]
+
+        popt = np.polyfit(wavelength, flux, 3)
+        poly = np.poly1d(popt)
+        continuum = poly(self.df.wavelength.values)
+
+        self.df['flux'] = self.df.flux.values / continuum
+
+        if plot or (ax is not None) or (savefig is not None):
+           
+            fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(12, 6))
+
+            ax.plot(self.df.wavelength, allflux, color='black')
+            for r in self.continuum_regions:
+                ax.axvspan(r[0], r[1], facecolor='xkcd:red', edgecolor='none', alpha=0.2)
+
+            ax.plot(wavelength, flux, color='xkcd:azure')
+            ax.plot(self.df.wavelength.values, continuum, color='xkcd:green', ls='--')
+
+            ax.set_xlabel(f'Wavelength ({self.wavelength_unit:latex})', fontsize=20)
+            if self.flux_unit == u.dimensionless_unscaled:
+                ax.set_ylabel('Scaled Flux', fontsize=20)
+            else:
+                ax.set_ylabel(f'Flux ({self.flux_unit:latex})', fontsize=20)
+
+            return plotutils.plt_return(created_fig, fig, ax, savefig)
+
+
     def plot(self, ax=None, savefig=None,
              plot_unit=None,
              offset=0,
@@ -377,6 +439,57 @@ class BaseSpectrum:
             ax.set_ylabel(f'Flux ({self.flux_unit:latex})', fontsize=20)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
+
+    def plot_velocity(self, rest_wavelength, ax=None, savefig=None,
+                      plot_unit=None, offset=0,
+                      velocity_range=None,
+                      plot_kwargs=None):
+        
+        '''
+        Plot the spectrum in velocity space
+
+        assume velocity range is in km/s
+        '''
+
+        fig, ax, created_fig = plotutils.fig_init(ax=ax)
+        if created_fig:
+            fig.subplots_adjust(top=.98, right=.98)
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+        plot_kwargs.setdefault('color', 'black')
+        plot_kwargs.setdefault('lw', 1)
+        plot_kwargs.setdefault('alpha', 1.0)
+
+        wavelength = self.df.wavelength.values * self.wavelength_unit
+        flux = self.df.flux.values
+
+        if not isinstance(rest_wavelength, u.quantity.Quantity):
+            raise TypeError('line wavelength must be astropy quantity')
+
+        vel = const.c * (wavelength - rest_wavelength) / rest_wavelength
+        vel = vel.to('km/s').value
+
+        if velocity_range is not None:
+            idx = np.where( (vel >= velocity_range[0]) &
+                            (vel <= velocity_range[1]) )[0]
+
+            if not len(idx):
+                self.print('No data in velocity range {velocity_range}')
+
+            vel = vel[idx]
+            flux = flux[idx]
+
+        ax.plot(vel, flux+offset, **plot_kwargs)
+
+        ax.set_xlabel(f'Velocity (km/s)', fontsize=20)
+        if self.flux_unit == u.dimensionless_unscaled:
+            ax.set_ylabel('Scaled Flux', fontsize=20)
+        else:
+            ax.set_ylabel(f'Flux ({self.flux_unit:latex})', fontsize=20)
+
+        return plotutils.plt_return(created_fig, fig, ax, savefig)
+
 
     def output_ispec_format(self, outfile, err=None):
         '''

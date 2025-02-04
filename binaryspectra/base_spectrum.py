@@ -920,7 +920,8 @@ class EchelleSpectrum:
     def reduce(self, 
                cr_quantile=None,
                deblaze_window=None, deblaze_percentile=None,
-               deblaze_degree=None, trim=None, flux_filter=None):
+               deblaze_degree=None, trim=None, flux_filter=None,
+               reduce=True):
 
         '''
         Reduce echelle spectrum for all orders
@@ -953,11 +954,12 @@ class EchelleSpectrum:
             eo = EchelleOrder(i, wave, flux)
             eo.df['wavelength'] = eo.df.wavelength.astype(float)
             eo.df['flux'] = eo.df.flux.astype(float)
-            eo.filter_cosmic_rays(quantile=cr_quantile)
-            eo.deblaze(window=deblaze_window, percentile=deblaze_percentile,
-                       degree=deblaze_degree)
-            eo.trim_edges(trim)
-            eo.flux_filter(flux_filter)
+            if reduce:
+                eo.filter_cosmic_rays(quantile=cr_quantile)
+                eo.deblaze(window=deblaze_window, percentile=deblaze_percentile,
+                           degree=deblaze_degree)
+                eo.trim_edges(trim)
+                eo.flux_filter(flux_filter)
 
             self.Orders.append(eo)
 
@@ -1138,10 +1140,21 @@ class EchelleSpectrum:
                     (Order.df.wavelength.min(), Order.df.wavelength.max()),
                     velocity_step)
 
-            depth = template.df.flux.values
+            if not hasattr(template, 'Orders'):
+                depth = template.df.flux.values
+                wavelength_template = template.df.wavelength.values
+            else:
+                template_order = template.get_order(Order.n)
+                #Do a quick check for wavelength range
+                if ((template_order.df.wavelength.max() < Order.df.wavelength.min()) or
+                    (template_order.df.wavelength.min() > Order.df.wavelength.max())):
+                    raise ValueError('Wavelength range of template order does not match spec order')
+
+                depth = template_order.df.flux.values
+                wavelength_template = template_order.df.wavelength.values
 
             resampled_template = spectrum_utils.resample_spectrum(
-                    wavelength_grid, template.df.wavelength.values, depth,
+                    wavelength_grid, wavelength_template, depth,
                     simple=True)
 
             resampled_template = 1 - resampled_template

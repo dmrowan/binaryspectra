@@ -153,7 +153,7 @@ class APFspec(EchelleSpectrum):
     trim=12
     flux_filter=1.3
     
-    def __init__(self, fname, verbose=True, name=None):
+    def __init__(self, fname, verbose=True, name=None, reduce=True):
         
         self.fname = fname
         hdul_wave = fits.open(utils.get_data_file('apf_wave_2022.fits'))
@@ -183,7 +183,7 @@ class APFspec(EchelleSpectrum):
 
         self.JD = utils.convert_jd_bjd(JD, self.RA, self.DEC, self.ObsName)
 
-        self.reduce()
+        self.reduce(reduce=reduce)
         self.barycentric_corrected = False
         self.name = name
 

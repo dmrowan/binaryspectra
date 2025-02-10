@@ -151,12 +151,18 @@ def organize_pepsi_files(spec_dir, skip_files=None):
 
     return final_list_full
 
-def get_template(teff, logg, wavelength_range=(4900, 5300)):
+def get_template(teff, logg, met=0.0, wavelength_range=(4900, 5300)):
     
     template_dir = os.environ['PHOENIX_DIR']
     logg_str = f'{logg:.2f}'
-    template_fname = f'lte{str(teff).zfill(5)}-{logg_str}-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits'
-    template_fname = os.path.join(template_dir, template_fname)
+    if met == 0:
+        template_fname = f'lte{str(teff).zfill(5)}-{logg_str}-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits'
+        template_fname = os.path.join(template_dir, template_fname)
+    elif met == 0.5:
+        template_fname = f'lte{str(teff).zfill(5)}-{logg_str}+0.5.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits'
+        template_fname = os.path.join(template_dir, 'Zp5', template_fname)
+    else:
+        raise ValueError(f'unavailable met {0.0}')
     
     if os.path.isfile(template_fname):
         template = spectra.PHOENIXspec(template_fname)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from astropy import units as u
+from astropy.time import Time
 import brokenaxes
 import copy
 import corner
@@ -19,11 +20,12 @@ import pandas as pd
 import subprocess
 from tqdm.autonotebook import tqdm
 
+from . import astrometric_orbit_fitter
 from . import plotutils
 from . import rv_orbit_fitter
-from . import utils
 from . import spectra
 from . import spectrum_utils
+from . import utils
 from . import fdbinary
 
 #Dom Rowan 2024
@@ -218,13 +220,17 @@ class SpectroscopicBinary:
     def gamma_corrected(self):
         return self._gamma_corrected
 
-    def load_rv_table(self, fname):
+    def load_rv_table(self, fname, time_offset=0):
 
         if isinstance(fname, pd.core.frame.DataFrame):
             self.df_rv = fname
         else:
             self.df_rv = pd.read_csv(fname)
+
         self.instrument_list = self.df_rv.Instrument.value_counts().index
+
+        self.df_rv['JD'] = self.df_rv.JD - time_offset
+        self.time_offset = time_offset
 
     def plot_rv_orbit_broken(self, fig=None, gs=None, 
                              savefig=None, gap=5, **kwargs):
@@ -356,14 +362,17 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                         marker=markers_dict[instrument],
                         **plot_kwargs)
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$ [d]', fontsize=20)
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'Radial Velocity [km/s]', fontsize=20)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
 
     def fit_rvs(self, guess, niters=50000, burnin=10000,
-                idx_mask=None, **lnprob_kwargs):
+                idx_mask=None, apsidal=False, **lnprob_kwargs):
 
         '''
         Fit RV model 
@@ -387,9 +396,13 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                     numba_dict[k] = v
 
         else:
-            K1, gamma, M0, ecc, omega, period = guess
+            if not apsidal:
+                K1, gamma, M0, ecc, omega, period = guess
+                pos = [K1, gamma, M0, ecc, omega, period, -5]
+            else:
+                K1, gamma, M0, ecc, omega, period, omegadot = guess
+                pos = [K1, gamma, M0, ecc, omega, period, -5, omegadot]
 
-        pos = [K1, gamma, M0, ecc, omega, period, -5]
         pos = pos + [ 0 for i in range(len(self.instrument_list)-1) ]
 
         nwalkers = len(pos)*2
@@ -417,6 +430,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         if guess == 'Gaia':
             lnprob_kwargs['gaia_dict'] = numba_dict
         else:
+            lnprob_kwargs.setdefault('apsidal', apsidal)
             lnprob_kwargs.setdefault('period_mu', period)
             lnprob_kwargs.setdefault('period_sigma', period*0.1)
 
@@ -429,6 +443,9 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         samples = sampler.get_chain(discard=burnin, flat=True)
         rv_samples =pd.DataFrame(samples)
         columns = ['K1', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs']
+        if apsidal:
+            columns.append('omegadot')
+
         columns = columns + [ f'rv_offset_{i}' 
                               for i in range(len(self.instrument_list)-1) ]
         rv_samples.columns = columns
@@ -464,6 +481,10 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                  r'$[\rm{rad}]$',
                  r'$[\rm{d}]$',
                  r'$\rm{[km/s]}$']
+
+        if 'omegadot' in samples.columns:
+            labels.append(r'$\dot{\omega}\ \rm{[deg/yr]}$')
+            units.append(r'$\rm{[deg/yr]}$')
 
         for i in range(len(self.instrument_list)-1):
             instrument = self.instrument_list[i]
@@ -579,19 +600,30 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                             marker=markers_dict[instrument], ls='', 
                             alpha=0.5)
 
+        apsidal = 'omegadot' in self.rv_samples.columns
+
         for i in range(100):
             
             sample = self.rv_samples.iloc[
                     np.random.randint(0, len(self.rv_samples))].to_numpy()
-            K1, gamma, phi0, ecc, omega, period = sample[:6]
-
-            model1 = rv_orbit_fitter.rv_model(
-                    tvals, K1, gamma, phi0, ecc, omega, period)
+            if not apsidal:
+                K1, gamma, phi0, ecc, omega, period = sample[:6]
+                model1 = rv_orbit_fitter.rv_model(
+                        tvals, K1, gamma, phi0, ecc, omega, period, omegadot=omegadot)
+            else:
+                K1, gamma, phi0, ecc, omega, period, logs, omegadot = sample[:8]
+                model1 = rv_orbit_fitter.rv_model(
+                        tvals, K1, gamma, phi0, ecc, omega, period, omegadot=omegadot)
 
             ax.plot(tvals, model1, color='xkcd:red', lw=1, alpha=0.2, zorder=1)
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$ [d]', fontsize=20)
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'$\rm{RV}\ [\rm{km/s}]$', fontsize=20)
+
+        ax.set_xlim(tmin, tmax)
 
         if legend:
             if legend_kwargs is None:
@@ -726,7 +758,10 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                             marker=markers_dict[instrument],
                             **plot_kwargs_masked)
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'Residuals (km/s)', fontsize=20)
 
         ax.axhline(0.0, color='gray', ls='--')
@@ -756,6 +791,69 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             label = r'$\chi^2_{\nu} = '+f'{chi2_val:.2f}'+r'$'
             ax.text(.95, .95, label, ha='right', va='top', 
                     fontsize=15, transform=ax.transAxes)
+
+    def plot_orbit_separation(self, M1, incl, ax=None, savefig=None,
+                              obs_date=None, distance=None, tmin=None, tmax=None,
+                              obs_sep=None,
+                              **kwargs):
+
+        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
+
+        if obs_date is not None:
+            if not utils.check_iter(obs_date):
+                obs_date = [obs_date]
+
+            obs_jd = [ Time(od).jd - self.time_offset for od in obs_date ]
+
+        if tmin is None:
+            tmin = self.df_rv.JD.min()
+            if obs_date is not None and (obs_jd[0] < tmin):
+                tmin = obs_jd[0] - 100
+        if tmax is None:
+            tmax = self.df_rv.JD.max()
+            if obs_date is not None and (obs_jd[-1] > tmax):
+                tmax = obs_jd[-1] + 100
+
+        tvals = np.linspace(tmin, tmax, 10000)
+
+        if distance is None:
+            distance = 1000
+
+        incl = incl *np.pi/180
+
+        for i in tqdm(range(100)):
+            j = -1*(i+1)
+            K = self.rv_samples.K1.iloc[j]
+            P = self.rv_samples.period.iloc[j]
+            T0 = self.rv_samples.T0.iloc[j]
+            ecc = self.rv_samples.ecc.iloc[j]
+            omega = self.rv_samples.omega.iloc[j]
+
+            seps = astrometric_orbit_fitter.projected_sep(
+                    tvals, M1, K, P, T0, ecc, omega, incl, distance)
+
+            ax.plot(tvals, seps, color='xkcd:red', lw=1, alpha=0.2, zorder=1)
+
+        if obs_sep is not None:
+            if distance == 1000:
+                raise ValueError('Must supply distance if plotting observed seps')
+
+            ax.scatter(obs_jd, obs_sep, marker='X',
+                       color='xkcd:azure', s=150, edgecolor='black',
+                       zorder=10)
+
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
+
+        if distance == 1000:
+            ax.set_ylabel('Projected Separation [AU]', fontsize=25)
+        else:
+            ax.set_ylabel('Projected Angular Sep. [mas]', fontsize=25)
+
+        return plotutils.plt_return(created_fig, fig, ax, savefig)
+
 
     def get_quadrature_spec(self):
         
@@ -904,7 +1002,10 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
                         color='xkcd:red', marker=markers[instrument],
                         ls='')
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'Radial Velocity (km/s)', fontsize=20)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
@@ -1099,7 +1200,10 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
             ax.plot(tvals, model1, color='black', lw=1, alpha=0.2, zorder=1)
             ax.plot(tvals, model2, color='xkcd:red', lw=1, alpha=0.2, zorder=1)
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'$\rm{RV}\ (\rm{km/s})$', fontsize=20)
 
         if legend:
@@ -1276,7 +1380,10 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
                             markeredgecolor='none',
                             ls='', alpha=0.3)
 
-        ax.set_xlabel(r'$\rm{JD}-2.46\times10^6$', fontsize=20)
+        if self.time_offset == 0:
+            ax.set_xlabel(r'$\rm{JD}$', fontsize=20)
+        else:
+            ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'Residuals (km/s)', fontsize=20)
 
         ax.axhline(0.0, color='gray', ls='--')

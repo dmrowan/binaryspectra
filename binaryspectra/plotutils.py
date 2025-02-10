@@ -66,7 +66,7 @@ def fig_init(ax=None, use_plotparams=True, figsize=(12,6), tight=True, **kwargs)
         created_fig=False
         fig=None
 
-    if created_fig:
+    if created_fig and tight:
         fig.subplots_adjust(top=.98, right=.98)
 
     if isinstance(ax, brokenaxes.BrokenAxes):

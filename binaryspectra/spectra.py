@@ -86,6 +86,14 @@ class PEPSIspec(BaseSpectrum):
 
         self.fdbinary_mask = False
 
+        #Determine crossdispersers
+        if hasattr(self, 'alt_header'):
+            self.CDs = (int(self.header['CROSDIS'][0]),
+                        int(self.alt_header['CROSDIS'][0]))
+        else:
+            self.CDs = (int(self.header['CROSDIS'][0]),)
+
+
     def apply_telluric_mask(self):
         
         #First make upper cut

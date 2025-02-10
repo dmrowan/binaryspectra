@@ -30,11 +30,8 @@ def eccentric_anomaly(M, e):
 @numba.jit(nopython=True)
 def rv_model(t, K, gamma, phi0, ecc, omega, period, omegadot=0):
 
-    #omegadot is units of deg/yr
-    #convert to rad/d * np.pi /180 /365
-
-    cosw = np.cos(omega + t*omegadot*(np.pi/180)*(1/365))
-    sinw = np.sin(omega + t*omegadot*(np.pi/180)*(1/365))
+    cosw = np.cos(omega + omegadot*t/365)
+    sinw = np.sin(omega + omegadot*t/365)
 
     M = ((2*np.pi*t)/period) - phi0
     E = np.zeros(len(M))
@@ -52,15 +49,10 @@ def rv_model(t, K, gamma, phi0, ecc, omega, period, omegadot=0):
     return model
 
 @numba.jit(nopython=True)
-def log_likelihood_sb1(theta, t, rv1, rv_err1, apsidal=False):
+def log_likelihood_sb1(theta, t, rv1, rv_err1):
 
-    if not apsidal:
-        K1, gamma, phi0, ecc, omega, period, logs = theta[:7]
-        rvoffsets = theta[7:]
-        omegadot = 0.0
-    else:
-        K1, gamma, phi0, ecc, omega, period, logs, omegadot = theta[:8]
-        rvoffsets = theta[8:]
+    K1, gamma, phi0, ecc, omega, period, logs, omegadot = theta[:8]
+    rvoffsets = theta[8:]
 
     s = np.exp(logs)
 
@@ -110,6 +102,8 @@ def log_likelihood_sb2(theta, t, rv1, rv_err1, rv2, rv_err2):
     if isinstance(t, tuple):
         assert(len(rvoffsets) == len(t)-1)
 
+
+
         models_1 = [ rv_model(t[i], K1, gamma, phi0, ecc, omega, period) + 0
                    if i == 0 else
                    rv_model(t[i], K1, gamma, phi0, ecc, omega, period) + rvoffsets[i-1]
@@ -158,15 +152,10 @@ def log_likelihood_sb2(theta, t, rv1, rv_err1, rv2, rv_err2):
         return lnlike
 
 @numba.jit(nopython=True)
-def lnprior_sb1(theta, period_mu=None, period_sigma=None, ecc_max=None, period_max=3000, apsidal=False):
+def lnprior_sb1(theta, period_mu=None, period_sigma=None, ecc_max=None, period_max=3000):
 
-    if not apsidal:
-        K1, gamma, phi0, ecc, omega, period, logs = theta[:7]
-        rvoffsets = theta[7:]
-        omegadot = 0.0
-    else:
-        K1, gamma, phi0, ecc, omega, period, logs, omegadot = theta[:8]
-        rvoffsets = theta[8:]
+    K1, gamma, phi0, ecc, omega, period, logs, omegadot = theta[:8]
+    rvoffsets = theta[8:]
 
     if np.any(np.isinf(theta)):
         return -np.inf
@@ -184,6 +173,7 @@ def lnprior_sb1(theta, period_mu=None, period_sigma=None, ecc_max=None, period_m
     period_condition = 0.5 <= period <= period_max
 
     logs_condition = -10 < logs < 0
+
     omegadot_condition = -2 < omegadot < 2
 
     conditions = [K_condition, gamma_condition, phi_condition, ecc_condition,
@@ -297,19 +287,18 @@ def lnprior_sb2(theta, period_mu=None, period_sigma=None, ecc_max=None, period_m
 
 @numba.jit(nopython=True)
 def lnprob_sb1(theta, t, rv1, rv_err1, 
-               period_mu=None, period_sigma=None, ecc_max=None, period_max=3000, gaia_dict=None,
-               apsidal=False):
+               period_mu=None, period_sigma=None, ecc_max=None, period_max=3000, gaia_dict=None):
 
     if gaia_dict is None:
         lp = lnprior_sb1(theta, period_mu=period_mu, period_sigma=period_sigma, ecc_max=ecc_max,
-                     period_max=period_max, apsidal=apsidal)
+                     period_max=period_max)
     else:
         lp = lnprior_sb1_gaia(theta, gaia_dict, ecc_max=ecc_max, period_max=period_max)
 
     if np.isinf(lp):
         return -np.inf
 
-    like = log_likelihood_sb1(theta, t, rv1, rv_err1, apsidal=apsidal)
+    like = log_likelihood_sb1(theta, t, rv1, rv_err1)
     if np.isinf(like):
         return -np.inf
 

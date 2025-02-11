@@ -66,30 +66,20 @@ def compute_xy(t, xcm, ycm, A, B, F, G, P, phi0, ecc):
     
     return x, y
 
-'''
-apsidal motion fit
-
-K1, gamma, phi0, ecc, omega, period, logs, sma, lan, incl, omegadot
-
-calculate omega = omega+omegadot*t (pay attention to units)
-
-calculate TI ABFG
-
-compute xy
-'''
 
 @numba.jit(nopython=True)
-def log_likelihood_sb1_astrometry(theta, trv, rv1, rv_err1, tast, astx, asty, astx_err, asty_err, distance):
+def log_likelihood_sb1_astrometry(theta, trv, rv1, rv_err1, 
+                                  tast, astx, asty, 
+                                  astx_err, asty_err, distance):
 
     K1, gamma, phi0, ecc, omega, period, logs, A, B, F, G = theta[:11]
     rvoffsets = theta[11:]
 
     #Build the theta for the RV likelihood
     #Have to do it this way because np concatenate doesn't work with numba
-
     #theta_rv = (K1, gamma, phi0, ecc, omega, period, logs)
 
-    theta_rv = np.empty_like(np.arange(len(theta[:7])+len(rvoffsets)))
+    theta_rv = np.empty_like(np.arange(len(theta[:7])+len(rvoffsets)), dtype=np.float64)
     for i in range(7):
         theta_rv[i] = theta[i]
     i = 7
@@ -113,13 +103,26 @@ def log_likelihood_sb1_astrometry(theta, trv, rv1, rv_err1, tast, astx, asty, as
     return lnlike
 
 @numba.jit(nopython=True)
-def lnprior_sb1_astrometry(theta, period_mu=None, period_sigma=None, ecc_max=None, period_max=3000):
+def lnprior_sb1_astrometry(theta, period_mu=None, period_sigma=None, 
+                           ecc_max=None, period_max=3000):
 
     K1, gamma, phi0, ecc, omega, period, logs, A, B, F, G = theta[:11]
     rvoffsets = theta[11:]
 
+    #Build the theta for the RV likelihood
+    #Have to do it this way because np concatenate doesn't work with numba
+    #theta_rv = (K1, gamma, phi0, ecc, omega, period, logs)
+
+    theta_rv = np.empty_like(np.arange(len(theta[:7])+len(rvoffsets)), dtype=np.float64)
+    for i in range(7):
+        theta_rv[i] = theta[i]
+    i = 7
+    for j in range(len(rvoffsets)):
+        theta_rv[i] = rvoffsets[j]
+        i += 1
+
     lnprior_rv = rv_orbit_fitter.lnprior_sb1(
-            theta, period_mu=period_mu, period_sigma=period_sigma,
+            theta_rv, period_mu=period_mu, period_sigma=period_sigma,
             ecc_max=ecc_max, period_max=period_max)
 
     A_condition = True
@@ -135,7 +138,6 @@ def lnprior_sb1_astrometry(theta, period_mu=None, period_sigma=None, ecc_max=Non
 
     if np.all(np.array(conditions)):
         return lp
-    
 
 @numba.jit(nopython=True)
 def lnprob_sb1_astrometry(theta, trv, rv1, rv_err1, tast, astx, asty, astx_err, asty_err,
@@ -148,9 +150,11 @@ def lnprob_sb1_astrometry(theta, trv, rv1, rv_err1, tast, astx, asty, astx_err, 
     if np.isinf(lp):
         return -np.inf
 
-    like = log_likelihood_sb1_astrometry(theta, trv, rv1, rv_err1, tast, astx, asty, astx_err, asty_err, distance)
+    like = log_likelihood_sb1_astrometry(theta, trv, rv1, rv_err1, 
+                                         tast, astx, asty, astx_err, asty_err, distance)
     if np.isinf(like):
         return -np.inf
 
     return lp+like
+
 

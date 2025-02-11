@@ -33,7 +33,6 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         else:
             raise NotImplementedError('Different time offset for RV and AST passed')
 
-
     def plot_ast(self, ax=None, savefig=None, **plot_kwargs):
         
         fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(6, 6))
@@ -248,19 +247,6 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         ax.set_ylabel(r'$\Delta y$ [mas]', fontsize=20)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

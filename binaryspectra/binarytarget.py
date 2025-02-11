@@ -609,7 +609,7 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             if not apsidal:
                 K1, gamma, phi0, ecc, omega, period = sample[:6]
                 model1 = rv_orbit_fitter.rv_model(
-                        tvals, K1, gamma, phi0, ecc, omega, period, omegadot=omegadot)
+                        tvals, K1, gamma, phi0, ecc, omega, period)
             else:
                 K1, gamma, phi0, ecc, omega, period, logs, omegadot = sample[:8]
                 model1 = rv_orbit_fitter.rv_model(

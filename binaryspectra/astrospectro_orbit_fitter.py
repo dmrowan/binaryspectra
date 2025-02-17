@@ -7,7 +7,31 @@ import numba
 
 from . import utils
 from . import rv_orbit_fitter
-from . import astrometric_orbit_fitter
+
+def projected_sep(t, M1, K, P, T0, ecc, omega, incl, distance):
+
+    #Compute M2 from K, M1, P and ecc
+    fM = utils.mass_function(P*u.day, K*u.km/u.s, e=ecc)
+    M2 = utils.companion_mass(fM, M1*u.M_sun, incl*180/np.pi).value
+
+    sma3 = const.G * (M1*u.M_sun+M2*u.M_sun) * (P*u.day)**2 / (4*np.pi**2)
+    sma = np.power(sma3, 1/3).to('AU').value
+
+    M = (2*np.pi / P) * (t-T0)
+    E = np.zeros(len(M))
+
+    for i in range(len(M)):
+        Ei = rv_orbit_fitter.eccentric_anomaly(M[i], ecc)
+        if Ei is None:
+            print('Here', M[i], ecc)
+        E[i] = Ei
+
+    f = 2*np.arctan( np.sqrt( (1+ecc) / (1-ecc) ) * np.tan(E / 2))
+
+    term1 = (1-ecc**2) / (1+ecc*np.cos(f))
+    term2 = np.sqrt(1 -np.square(np.sin(incl))*np.square(np.sin(f+omega)))
+
+    return sma * term1 * term2 * 1000 / distance
 
 @numba.jit(nopython=True)
 def rv_model(t, C, H, period, phi0, ecc, gamma):
@@ -32,6 +56,32 @@ def rv_model(t, C, H, period, phi0, ecc, gamma):
     model = gamma + K1 * (cosw*cosf - sinw*sinf + ecc*cosw)
 
     return model
+
+@numba.jit(nopython=True)
+def compute_TI(sma, incl, omega, lan):
+
+    A = sma*(np.cos(lan)*np.cos(omega) - np.cos(incl)*np.sin(lan)*np.sin(omega))
+    B = sma*(np.sin(lan)*np.cos(omega) + np.cos(incl)*np.cos(lan)*np.sin(omega))
+    F = sma*(-np.cos(lan)*np.sin(omega) - np.cos(incl)*np.sin(lan)*np.cos(omega))
+    G = sma*(-np.sin(lan)*np.sin(omega) + np.cos(incl)*np.cos(lan)*np.cos(omega))
+
+    return A, B, F, G
+
+@numba.jit(nopython=True)
+def compute_xy(t, xcm, ycm, A, B, F, G, P, phi0, ecc):
+
+    M = ((2*np.pi*t)/P) - phi0
+    u = np.zeros(len(M))
+    for i in range(len(M)):
+        Ei = rv_orbit_fitter.eccentric_anomaly(M[i], ecc)
+        if Ei is None:
+            print('Here', M[i], ecc)
+        u[i] = Ei
+
+    x = xcm - A*(np.cos(u) - ecc) - F*(1-ecc**2)**(1/2) * np.sin(u)
+    y = xcm - B*(np.cos(u) - ecc) - G*(1-ecc**2)**(1/2) * np.sin(u)
+
+    return x, y
 
 @numba.jit(nopython=True)
 def log_likelihood_sb1(theta, t, rv1, rv_err1):
@@ -101,8 +151,7 @@ def log_likelihood_astrosb1(theta, trv, rv1, rv_err1, tast, astx, asty,
     lnlike_rv = log_likelihood_sb1(theta_rv, trv, rv1, rv_err1)
 
     #Compute ast likelihood
-    model_x, model_y = astrometric_orbit_fitter.compute_xy(
-            tast, 0, 0, A, B, F, G, period, phi0, ecc)
+    model_x, model_y = compute_xy(tast, 0, 0, A, B, F, G, period, phi0, ecc)
     
     model_x = model_x * 1000/distance
     model_y = model_y * 1000/distance

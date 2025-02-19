@@ -20,8 +20,9 @@ from . import utils
 
 class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
-    def set_distance(self, value):
-        self.distance = value
+    def set_parallax(self, value):
+        self.distance = 1000/value
+        self.parallax = value
     
     def load_ast_table(self, fname, time_offset=0):
         
@@ -61,7 +62,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         A, B, F, G, C, H, period, phi0, ecc, gamma = guess
         logs = -5
 
-        pos = [A, B, F, G, C, H, period, phi0, ecc, gamma, logs]
+        pos = [A, B, F, G, C, H, period, phi0, ecc, gamma, logs, self.parallax]
         pos = pos + [ 0 for i in range(len(self.instrument_list)-1) ]
 
         nwalkers = len(pos)*2
@@ -89,11 +90,13 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
                 self.df_ast.xpos.values,
                 self.df_ast.ypos.values,
                 self.df_ast.xerr.values,
-                self.df_ast.yerr.values,
-                self.distance)
+                self.df_ast.yerr.values)
+                
 
         lnprob_kwargs.setdefault('period_mu', period)
         lnprob_kwargs.setdefault('period_sigma', period*0.1)
+        lnprob_kwargs.setdefault('parallax_mu', self.parallax)
+        lnprob_kwargs.setdefault('parallax_sigma', self.parallax_sigma)
 
         sampler = emcee.EnsembleSampler(
                 nwalkers, ndim, astrospectro_orbit_fitter.lnprob_astrosb1,
@@ -107,7 +110,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         ast_rv_samples = pd.DataFrame(samples)
 
         columns = ['A_TI', 'B_TI', 'F_TI', 'G_TI', 'C_TI', 'H_TI',
-                   'period', 'M0', 'ecc', 'gamma', 'logs']
+                   'period', 'M0', 'ecc', 'gamma', 'logs', 'parallax']
         
         columns = columns + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
         ast_rv_samples.columns = columns
@@ -177,7 +180,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
         if params is None:
             params = ['A_TI', 'B_TI', 'F_TI', 'G_TI', 'C_TI', 'H_TI',
-                      'period', 'M0', 'ecc', 'gamma', 'logs']
+                      'period', 'M0', 'ecc', 'gamma', 'logs', 'parallax']
 
             params.extend([ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ])
 
@@ -198,7 +201,8 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
                         'M2': [r'$M_2\ [M_\odot]$', r'$[M_\odot]$'],
                         'incl': [r'Incl [$^\circ$]', r'$[^\circ]$'],
                         'sma': [r'$a\ \rm{[AU]}$', r'$\rm{[AU]}$'],
-                        'a1': [r'$a_1\ \rm{[AU]}$', r'$\rm{[AU]}$']}
+                        'a1': [r'$a_1\ \rm{[AU]}$', r'$\rm{[AU]}$'],
+                        'parallax':[r'$\pi\ \rm{[mas]}$', r'$\rm{[mas]}$']}
 
         for i in range(len(self.instrument_list)-1):
             

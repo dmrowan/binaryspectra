@@ -128,10 +128,10 @@ def log_likelihood_sb1(theta, t, rv1, rv_err1):
 
 @numba.jit(nopython=True)
 def log_likelihood_astrosb1(theta, trv, rv1, rv_err1, tast, astx, asty,
-                            astx_err, asty_err, distance):
+                            astx_err, asty_err):
 
-    A, B, F, G, C, H, period, phi0, ecc, gamma, logs = theta[:11]
-    rvoffsets = theta[11:]
+    A, B, F, G, C, H, period, phi0, ecc, gamma, logs, parallax = theta[:12]
+    rvoffsets = theta[12:]
 
     #Compute the rv likelihood
     #build theta rv
@@ -153,8 +153,8 @@ def log_likelihood_astrosb1(theta, trv, rv1, rv_err1, tast, astx, asty,
     #Compute ast likelihood
     model_x, model_y = compute_xy(tast, 0, 0, A, B, F, G, period, phi0, ecc)
     
-    model_x = model_x * 1000/distance
-    model_y = model_y * 1000/distance
+    model_x = model_x * parallax
+    model_y = model_y * parallax
 
     lnlike_ast = -0.5*np.sum(np.square( (astx-model_x) / astx_err ))
     lnlike_ast += -0.5*np.sum(np.square( (asty-model_y) / asty_err ))
@@ -164,10 +164,11 @@ def log_likelihood_astrosb1(theta, trv, rv1, rv_err1, tast, astx, asty,
     return lnlike
 
 @numba.jit(nopython=True)
-def lnprior_astrosb1(theta, period_mu=None, period_sigma=None, ecc_max=0.9, period_max=3000):
+def lnprior_astrosb1(theta, period_mu=None, period_sigma=None, ecc_max=0.9, period_max=3000,
+                     parallax_mu=None, parallax_sigma=None):
     
-    A, B, F, G, C, H, period, phi0, ecc, gamma, logs = theta[:11]
-    rvoffsets = theta[11:]
+    A, B, F, G, C, H, period, phi0, ecc, gamma, logs, parallax = theta[:12]
+    rvoffsets = theta[12:]
 
     if np.any(np.isinf(theta)):
         return -np.inf
@@ -184,6 +185,7 @@ def lnprior_astrosb1(theta, period_mu=None, period_sigma=None, ecc_max=0.9, peri
     phi0_condition = 0 <= phi0 <= 2*np.pi
     ecc_condition = 0 <= ecc <= ecc_max
     gamma_condition = True
+    parallax_condition = parallax > 0
 
     logs_condition = -10 < logs < 0
 
@@ -199,6 +201,8 @@ def lnprior_astrosb1(theta, period_mu=None, period_sigma=None, ecc_max=0.9, peri
             conditions.append( -5 <= rvo <= 5 )
             lp += -0.5*((rvo)/1.5)**2
 
+    lp += -0.5*((parallax-parallax_mu)/parallax_sigma)**2
+
     if period_mu is None:
         if np.all(np.array(conditions)):
             return lp
@@ -206,22 +210,25 @@ def lnprior_astrosb1(theta, period_mu=None, period_sigma=None, ecc_max=0.9, peri
             return -np.inf
     else:
         if np.all(np.array(conditions)):
-            return lp + -0.5*((period-period_mu)/period_sigma)**2
+            lp += -0.5*((period-period_mu)/period_sigma)**2
+            return lp
         else:
             return -np.inf
 
 @numba.jit(nopython=True)
 def lnprob_astrosb1(theta, trv, rv1, rv_err1, tast, astx, asty, astx_err, asty_err,
-                    distance, period_mu=None, period_sigma=None, ecc_max=0.9, period_max=3000):
+                    period_mu=None, period_sigma=None, ecc_max=0.9, period_max=3000,
+                    parallax_mu=None, parallax_sigma=None):
 
     lp = lnprior_astrosb1(theta, period_mu=period_mu, period_sigma=period_sigma, 
-                          ecc_max=ecc_max, period_max=period_max)
+                          ecc_max=ecc_max, period_max=period_max,
+                          parallax_mu=parallax_mu, parallax_sigma=parallax_sigma)
 
     if np.isinf(lp):
         return -np.inf
 
     like = log_likelihood_astrosb1(theta, trv, rv1, rv_err1,
-                                   tast, astx, asty, astx_err, asty_err, distance)
+                                   tast, astx, asty, astx_err, asty_err)
     if np.isinf(like):
         return -np.inf
 

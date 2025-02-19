@@ -62,7 +62,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         A, B, F, G, C, H, period, phi0, ecc, gamma = guess
         logs = -5
 
-        pos = [A, B, F, G, C, H, period, phi0, ecc, gamma, logs, self.parallax]
+        pos = [A, B, F, G, C, H, period, phi0, ecc, gamma, logs]
         pos = pos + [ 0 for i in range(len(self.instrument_list)-1) ]
 
         nwalkers = len(pos)*2
@@ -95,8 +95,6 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
         lnprob_kwargs.setdefault('period_mu', period)
         lnprob_kwargs.setdefault('period_sigma', period*0.1)
-        lnprob_kwargs.setdefault('parallax_mu', self.parallax)
-        lnprob_kwargs.setdefault('parallax_sigma', self.parallax_sigma)
 
         sampler = emcee.EnsembleSampler(
                 nwalkers, ndim, astrospectro_orbit_fitter.lnprob_astrosb1,
@@ -104,13 +102,12 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
                 kwargs=lnprob_kwargs)
 
         sampler.run_mcmc(pos, niters, progress=self.verbose)
-        print(sampler)
         samples = sampler.get_chain(discard=burnin, flat=True)
         
         ast_rv_samples = pd.DataFrame(samples)
 
         columns = ['A_TI', 'B_TI', 'F_TI', 'G_TI', 'C_TI', 'H_TI',
-                   'period', 'M0', 'ecc', 'gamma', 'logs', 'parallax']
+                   'period', 'M0', 'ecc', 'gamma', 'logs']
         
         columns = columns + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
         ast_rv_samples.columns = columns
@@ -132,7 +129,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         uu = (A**2 + B**2 + F**2 + G**2) / 2
         v = A*G - B*F
 
-        a = np.sqrt(uu + np.sqrt((uu+v)*(uu-v)))
+        a_d = np.sqrt(uu + np.sqrt((uu+v)*(uu-v)))
 
         omega_p_Omega = np.arctan((B-F)/(A+G)) 
         omega_m_Omega = np.arctan((B+F)/(G-A))
@@ -157,6 +154,37 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
         a1 = np.sqrt(C**2 + H**2) / np.sin(incl)
 
+        self.ast_rv_samples['a1'] = a1
+        self.ast_rv_samples['incl'] = incl * 180/np.pi
+        self.ast_rv_samples['sma_d'] = a_d
+
+        if hasattr(self, 'parallax'):
+            self.compute_masses(distance=self.distance, save=True)
+            """
+            a = a_d * self.distance / 1000
+
+            period = self.ast_rv_samples.period.values
+            M2 = 4*np.pi**2 * np.square(a*u.au) * (a1*u.AU) / (const.G*np.square(period*u.day))
+            M2 = M2.to('M_sun').value
+
+            Mtotal = 4*np.pi**2 * np.power(a*u.au, 3) / (const.G*np.square(period*u.day))
+            M1 = Mtotal.to('M_sun').value - M2
+
+            self.ast_rv_samples['sma'] = a
+            self.ast_rv_samples['M1'] = M1
+            self.ast_rv_samples['M2'] = M2
+            """
+
+    def compute_masses(self, parallax=None, distance=None, save=False):
+
+        if parallax is not None:
+            distance = 1000 / parallax
+        else:
+            assert(distance is not None)
+
+        a = self.ast_rv_samples.sma_d.values * distance / 1000
+        a1 = self.ast_rv_samples.a1.values
+
         period = self.ast_rv_samples.period.values
         M2 = 4*np.pi**2 * np.square(a*u.au) * (a1*u.AU) / (const.G*np.square(period*u.day))
         M2 = M2.to('M_sun').value
@@ -164,11 +192,14 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         Mtotal = 4*np.pi**2 * np.power(a*u.au, 3) / (const.G*np.square(period*u.day))
         M1 = Mtotal.to('M_sun').value - M2
 
-        self.ast_rv_samples['sma'] = a
-        self.ast_rv_samples['a1'] = a1
-        self.ast_rv_samples['incl'] = incl * 180/np.pi
-        self.ast_rv_samples['M1'] = M1
-        self.ast_rv_samples['M2'] = M2
+        if save:
+            self.ast_rv_samples['sma'] = a
+            self.ast_rv_samples['M1'] = M1
+            self.ast_rv_samples['M2'] = M2
+
+        return M1, M2
+
+
 
     def plot_ast_rv_corner(self, savefig=None, figsize=None,
                            params=None,
@@ -180,7 +211,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
         if params is None:
             params = ['A_TI', 'B_TI', 'F_TI', 'G_TI', 'C_TI', 'H_TI',
-                      'period', 'M0', 'ecc', 'gamma', 'logs', 'parallax']
+                      'period', 'M0', 'ecc', 'gamma', 'logs']
 
             params.extend([ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ])
 
@@ -190,8 +221,8 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
                         'B_TI': [r'B_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
                         'F_TI': [r'F_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
                         'G_TI': [r'G_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
-                        'C_TI': [r'C_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
-                        'H_TI': [r'H_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
+                        'C_TI': [r'C_{\rm{TI}} [AU]', r'$\rm{[AU]}$'],
+                        'H_TI': [r'H_{\rm{TI}} [AU]', r'$\rm{[AU]}$'],
                         'period': [r'$P \rm{[d]}$', r'$[\rm{d}]$'],
                         'M0': [r'$M_0\ \rm{[rad]}$', r'$[\rm{rad}]$'],
                         'ecc': ['Ecc', ''],
@@ -201,8 +232,7 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
                         'M2': [r'$M_2\ [M_\odot]$', r'$[M_\odot]$'],
                         'incl': [r'Incl [$^\circ$]', r'$[^\circ]$'],
                         'sma': [r'$a\ \rm{[AU]}$', r'$\rm{[AU]}$'],
-                        'a1': [r'$a_1\ \rm{[AU]}$', r'$\rm{[AU]}$'],
-                        'parallax':[r'$\pi\ \rm{[mas]}$', r'$\rm{[mas]}$']}
+                        'a1': [r'$a_1\ \rm{[AU]}$', r'$\rm{[AU]}$']}
 
         for i in range(len(self.instrument_list)-1):
             
@@ -350,8 +380,8 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
             xvals, yvals = astrospectro_orbit_fitter.compute_xy(tvals, 0, 0, A, B, F, G, period, phi0, ecc)
 
-            xvals = xvals * 1000/self.distance
-            yvals = yvals * 1000/self.distance
+            xvals = xvals #* 1000/self.distance
+            yvals = yvals #* 1000/self.distance
 
             ax.plot(xvals, yvals, color='xkcd:azure', alpha=0.2, lw=1, zorder=1)
 

@@ -25,6 +25,11 @@ def plotparams(ax, labelsize=15):
     :returns: modified matplotlib axes object
     '''
 
+    if isinstance(ax, np.ndarray):
+        for a in ax.reshape(-1):
+            plotparams(a)
+        return
+
     ax.minorticks_on()
     ax.yaxis.set_ticks_position('both')
     ax.xaxis.set_ticks_position('both')

@@ -119,6 +119,7 @@ def plotparams_bax(bax):
             ax.spines['left'].set_linewidth(1.5)
             ax.tick_params('both', length=8, width=1.8, which='major')
             ax.tick_params('both', length=4, width=1, which='minor')
+            ax.yaxis.tick_left()
         if i == len(bax.axs)-1:
             ax.spines['right'].set_linewidth(1.5)
             ax.yaxis.tick_right()

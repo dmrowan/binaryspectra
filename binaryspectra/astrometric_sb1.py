@@ -6,6 +6,7 @@ import corner
 import emcee
 import matplotlib.pyplot as plt
 from matplotlib import rc
+import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 from tqdm.autonotebook import tqdm
@@ -41,10 +42,10 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(6, 6))
 
         plot_kwargs.setdefault('color', 'black')
-        plot_kwargs.setdefault('marker', '.')
+        plot_kwargs.setdefault('marker', 'o')
 
         ax.scatter(self.df_ast.xpos, self.df_ast.ypos, **plot_kwargs)
-        ax.scatter([0], [0], color='xkcd:red', marker='*')
+        ax.scatter([0], [0], color='xkcd:red', marker='*', s=150)
 
         lim = np.max(np.abs(ax.get_xlim() + ax.get_ylim()))*1.1
         ax.set_xlim(-1*lim, lim)
@@ -158,6 +159,8 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
         self.ast_rv_samples['incl'] = incl * 180/np.pi
         self.ast_rv_samples['sma_d'] = a_d
 
+        self.ast_rv_samples['T0'] = self.ast_rv_samples.M0 * self.ast_rv_samples.period / (2*np.pi)
+
         if hasattr(self, 'parallax'):
             self.compute_masses(distance=self.distance, save=True)
             """
@@ -204,33 +207,37 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
     def plot_ast_rv_corner(self, savefig=None, figsize=None,
                            params=None,
                            gaia_priors=False,
-                           offset_numeric_label=True):
+                           offset_numeric_label=True,
+                           subplots_adjust_kwargs=None,
+                           corner_kwargs=None,
+                           plot_orbit=False, **orbit_kwargs):
             
         if not hasattr(self, 'ast_rv_samples'):
             raise ValueError('Ast+RV orbit must be fit first')
 
         if params is None:
             params = ['A_TI', 'B_TI', 'F_TI', 'G_TI', 'C_TI', 'H_TI',
-                      'period', 'M0', 'ecc', 'gamma', 'logs']
+                      'period', 'T0', 'ecc', 'gamma', 'logs']
 
             params.extend([ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ])
 
         samples = self.ast_rv_samples[params].copy()
 
-        labels_units = {'A_TI': [r'A_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
-                        'B_TI': [r'B_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
-                        'F_TI': [r'F_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
-                        'G_TI': [r'G_{\rm{TI}} [mas]', r'$\rm{[mas]}$'],
-                        'C_TI': [r'C_{\rm{TI}} [AU]', r'$\rm{[AU]}$'],
-                        'H_TI': [r'H_{\rm{TI}} [AU]', r'$\rm{[AU]}$'],
+        labels_units = {'A_TI': [r'$A\ \rm{[mas]}$', r'$\rm{[mas]}$'],
+                        'B_TI': [r'$B\ \rm{[mas]}$', r'$\rm{[mas]}$'],
+                        'F_TI': [r'$F\ \rm{[mas]}$', r'$\rm{[mas]}$'],
+                        'G_TI': [r'$G\ \rm{[mas]}$', r'$\rm{[mas]}$'],
+                        'C_TI': [r'$C\ \rm{[AU]}$', r'$\rm{[AU]}$'],
+                        'H_TI': [r'$H\ \rm{[AU]}$', r'$\rm{[AU]}$'],
                         'period': [r'$P \rm{[d]}$', r'$[\rm{d}]$'],
                         'M0': [r'$M_0\ \rm{[rad]}$', r'$[\rm{rad}]$'],
-                        'ecc': ['Ecc', ''],
+                        'T0': [r'$T_0\ \rm{[d]}$', r'$[\rm{d}]$'],
+                        'ecc': [r'$e$', ''],
                         'gamma': [r'$\gamma\ \rm{[km/s]}$', r'$\rm{[km/s]}$',],
                         'logs': [r'$\log s\ \rm{[km/s]}$', r'$\rm{[km/s]}$'],
                         'M1': [r'$M_1\ [M_\odot]$', r'$[M_\odot]$'],
                         'M2': [r'$M_2\ [M_\odot]$', r'$[M_\odot]$'],
-                        'incl': [r'Incl [$^\circ$]', r'$[^\circ]$'],
+                        'incl': [r'$\rm{Incl}\ [^\circ]$', r'$[^\circ]$'],
                         'sma': [r'$a\ \rm{[AU]}$', r'$\rm{[AU]}$'],
                         'a1': [r'$a_1\ \rm{[AU]}$', r'$\rm{[AU]}$']}
 
@@ -253,10 +260,33 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
         fig, ax = plt.subplots(samples.shape[1], samples.shape[1], figsize=figsize)
 
+        if corner_kwargs is None:
+            corner_kwargs = {}
+
+        if 'hist_kwargs' not in corner_kwargs.keys():
+            corner_kwargs['hist_kwargs'] = {}
+        corner_kwargs['hist_kwargs'].setdefault('lw', 3)
+        corner_kwargs['hist_kwargs'].setdefault('color', 'black')
+
+        corner_kwargs.setdefault('quantiles', [0.5])
+
+        if 'label_kwargs' not in corner_kwargs.keys():
+            corner_kwargs['label_kwargs'] = {}
+        corner_kwargs['label_kwargs'].setdefault('fontsize', 17)
+
+        corner_kwargs.setdefault('labelpad', 0.1)
+
         fig = corner.corner(samples, labels=labels, fig=fig,
-                            hist_kwargs=dict(lw=3, color='black'),
-                            quantiles=[0.5],
-                            label_kwargs=dict(fontsize=22))
+                            **corner_kwargs)
+
+        if subplots_adjust_kwargs is None:
+            subplots_adjust_kwargs = {}
+        subplots_adjust_kwargs.setdefault('top', 0.98)
+        subplots_adjust_kwargs.setdefault('right', 0.98)
+        subplots_adjust_kwargs.setdefault('left', 0.08)
+        subplots_adjust_kwargs.setdefault('bottom', 0.08)
+
+        fig.subplots_adjust(**subplots_adjust_kwargs)
 
         for a in ax.reshape(-1):
             a = plotutils.plotparams(a)
@@ -276,10 +306,41 @@ class AstrometricSB1(binarytarget.SingleLinedSpectroscopicBinary):
 
             ax[i,i].set_title(title, fontsize=12)
 
+        if plot_orbit:
+            x = (ax.shape[1] / 2) - 0.5
+            axi = ax[0, ax.shape[1]-1].inset_axes(
+                    bounds=[-(x-1), -(x-1), x, x], transform=ax[0, ax.shape[1]-1].transAxes)
+
+            axi = self.plot_ast_orbit(ax=axi, **orbit_kwargs)
+
+        if 'period' in params:
+
+            fig.canvas.draw()
+            idx_p = np.where(np.asarray(params) == 'period')[0][0]
+            offset_text = ax[-1, idx_p].xaxis.get_offset_text()
+            text_contents = offset_text.get_text()
+            tick_labels = ax[-1, idx_p].get_xticklabels()
+            ax[-1, idx_p].xaxis.get_major_formatter().set_useOffset(False)
+            ax[-1, idx_p].set_xticklabels([t.get_text() for t in tick_labels])
+            ax[-1, idx_p].text(.5, -.75, text_contents, ha='center', va='center',
+                               fontsize=12, transform=ax[-1, idx_p].transAxes)
+            fig.canvas.draw()
+
+
         if savefig is None:
             plt.show()
         else:
             fig.savefig(savefig)
+
+
+        """
+        # Debug: Print all axes and their offset text content
+        for a in fig.get_axes():
+            offset_text = a.xaxis.get_offset_text()
+            text_content = offset_text.get_text()
+            if text_content:  # Only print if there's an actual offset
+                print(f"Offset for axis {a}: {text_content}")
+        """
 
     def plot_rv_ast_orbit(self, ax=None, savefig=None, legend=False, legend_kwargs=None,
                           markers_dict=None, tmin=None, tmax=None):

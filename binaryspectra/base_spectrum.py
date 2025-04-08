@@ -14,7 +14,7 @@ import pandas as pd
 import pickle
 from specutils.spectra import Spectrum1D
 from scipy.ndimage import median_filter
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 import warnings
 
 import specmatchemp.library
@@ -744,11 +744,11 @@ class EchelleOrder(BaseSpectrum):
         '''
 
         score = np.concatenate([[0],spectrum_utils.modified_z_score(np.diff(self.df.flux))])
-        threshold = np.quantile(score, quantile)
+        threshold = np.nanquantile(score, quantile)
 
         threshold = np.min([threshold, minimum_threshold])
 
-        idx = np.where(score < threshold)[0]
+        idx = np.where((score < threshold) & (np.logical_not(np.isnan(score))))[0]
 
         #If there is a floating index, remove
         #This is to try to get rid of double-cosmic rays
@@ -763,6 +763,7 @@ class EchelleOrder(BaseSpectrum):
 
         wave_crr = self.df.wavelength.copy()[idx_cleaned]
         flux_crr = self.df.flux.copy()[idx_cleaned]
+
 
         self.df['flux'] = np.interp(self.df.wavelength, wave_crr, flux_crr)
 
@@ -1111,6 +1112,8 @@ class EchelleSpectrum:
         plot_kwargs.setdefault('alpha', 0.7)
         plot_kwargs.setdefault('lw', 1)
 
+        verbose = self.verbose
+        self.verbose = False
         for Order in self.Orders:
             ax = Order.plot(ax=ax, plot_kwargs=plot_kwargs, **kwargs)
             if alternating_colors:
@@ -1118,6 +1121,8 @@ class EchelleSpectrum:
                     plot_kwargs['color'] = 'xkcd:red'
                 else:
                     plot_kwargs['color'] = 'black'
+
+        self.verbose = verbose
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 

@@ -306,13 +306,25 @@ def query_gaia_orbit(source, catalog='I/357/tbosb1'):
     r = r.to_pandas().iloc[0].to_dict()
     r['Source'] = source
 
+    """
     #Convert omega to be from -pi to pi
     if r['omega'] > 180:
         r['omega'] = r['omega'] - 360
     r['omega'] = r['omega'] * np.pi/180
     r['e_omega'] = r['e_omega'] * np.pi/180
+    """
+    r['omega'] = r['omega'] * np.pi/180
+    r['e_omega'] = r['e_omega'] * np.pi/180
 
     return r
 
+def is_P_unimodal(period_samples, data_times):
+    '''
+    using thejoker defition using the concept of period resolution
+    '''
 
+    P_min = np.min(period_samples)
+    T = np.ptp(data_times)
+    delta = 4*P_min**2 / (2*np.pi*T)
 
+    return np.ptp(period_samples) < delta

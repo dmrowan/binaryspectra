@@ -16,6 +16,11 @@ import numpy as np
 import pandas as pd
 from pyvo.dal.ssa import SSAService
 import requests
+try:
+    from sparcl.client import SparclClient
+    client = SparclClient()
+except:
+    print('SparclClient connection failed')
 from scipy.ndimage import median_filter
 from specutils.manipulation import FluxConservingResampler
 from specutils import Spectrum1D
@@ -231,13 +236,17 @@ class CHIRONspec(EchelleSpectrum):
         coord = SkyCoord(ra_hms+' '+dec_dms, unit=(u.hourangle, u.deg))
         self.RA = coord.ra.deg
         self.DEC = coord.dec.deg
-        JD = Time(self.header['EMMNWOB'], format='isot', scale='utc').jd
+        try:
+            JD = Time(self.header['EMMNWOB'], format='isot', scale='utc').jd
+        except:
+            print('JD determination with EMMNWOB failed, using UTSHUT')
+            JD = Time(self.header['UTSHUT'], format='isot', scale='utc').jd
         self.ObsName = 'Cerro Tololo Interamerican Observatory'
 
         self.JD = utils.convert_jd_bjd(JD, self.RA, self.DEC, self.ObsName)
         if run_reduction:
             self.reduce()
-        self.barycentric_corrected = False
+            self.barycentric_corrected = False
 
         self.fdbinary_mask = False
 
@@ -585,4 +594,29 @@ class GaiaXPspec(GaiaSpec):
         self.params['teff_xgboost'] = r.teff_xgboost
         self.params['logg_xgboost'] = r.logg_xgboost
         self.params['mh_xgboost'] = r.mh_xgboost
+
+class DESIspec(BaseSpectrum):
+    
+    def __init__(self, targetid):
+        
+        found = client.find(outfields=['sparcl_id', 'targetid', 'survey', 'ra', 'dec', 'spectype'],
+                            constraints=dict(targetid=[targetid]))
+
+        if not len(found):
+            print('No target found')
+            return
+
+        r = client.retrieve([found.records[0]['sparcl_id']])
+
+        wavelength = r.data[1]['wavelength']
+        flux = r.data[1]['flux']
+
+        super().__init__(wavelength, flux)
+        self.targetid = targetid
+
+        self.df = self.df[self.df.flux > 0].reset_index(drop=True)
+
+        self.link = f'https://www.legacysurvey.org/viewer/desi-spectrum/edr/targetid{self.targetid}'
+
+
 

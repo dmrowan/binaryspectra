@@ -17,6 +17,8 @@ from numba.types import unicode_type, float64
 import numpy as np
 import os
 import pandas as pd
+import pickle
+import pkg_resources
 import subprocess
 from tqdm.autonotebook import tqdm
 
@@ -169,6 +171,25 @@ class SpectroscopicBinary:
         except:
             return []
 
+    def get_wavelength_range(self, wavelength_unit=u.AA):
+
+        spec = self.spectra[0]
+        wmin, wmax = spec.get_wavelength_range()
+        wmin = (wmin*spec.wavelength_unit).to(wavelength_unit).value
+        wmax = (wmax*spec.wavelength_unit).to(wavelength_unit).value
+
+        for i in range(1, len(self.spectra)):
+            wmini, wmaxi = self.spectra[i].get_wavelength_range()
+            wmini = (wmini*self.spectra[i].wavelength_unit).to(wavelength_unit).value
+            wmaxi = (wmaxi*self.spectra[i].wavelength_unit).to(wavelength_unit).value
+
+            if wmini < wmin:
+                wmin = wmini
+            if wmaxi > wmax:
+                wmax = wmaxi
+
+        return wmin, wmax
+
     def filter_wavelength_range(self, lower, upper, wavelength_unit=u.AA):
 
         for spec in self.spectra:
@@ -263,8 +284,8 @@ class SpectroscopicBinary:
 
         if fig is None:
             created_fig = True
-            fig = plt.Figure(figsize=(10, 6))
-            fig.subplots_adjust(top=.95, right=.98)
+            fig = plt.Figure(figsize=(12, 6))
+            fig.subplots_adjust(top=.95, right=.98, left=0.08)
             bax = brokenaxes.brokenaxes(fig=fig, xlims=xlims, despine=False)
             bax = self.plot_rv_orbit(ax=bax, **kwargs)
 
@@ -291,22 +312,24 @@ class SpectroscopicBinary:
 
 class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
-    def measure_rvs(self, template):
+    def measure_rvs(self, template, **kwargs):
         
         current_verbose = self.verbose
         self.verbose = False
-        for i, spec in tqdm(enumerate(self.spectra)):
-            spec.cross_correlation(template)
+        for spec in tqdm(self.spectra):
+            spec.cross_correlation(template, **kwargs)
             spec.ccf.model()
         self.verbose = current_verbose
 
-    def build_rv_table(self):
+    def build_rv_table(self, time_offset=0.0):
 
         jds = []
         rvs1 = []
         rv_errs1 = []
         instruments = []
         specs = []
+
+        self.time_offset = time_offset
 
         spec_lists = [self.pepsi_spectra, 
                       self.apf_spectra, 
@@ -319,12 +342,16 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                 
                 jds.append(spec.JD)
 
-                if isinstance(spec, spectra.APFspec):
-                    rvs1.append(spec.ccf.models[0].mu - 2.36)
-                else:
-                    rvs1.append(spec.ccf.models[0].mu)
+                if len(spec.ccf.models):
+                    if isinstance(spec, spectra.APFspec):
+                        rvs1.append(spec.ccf.models[0].mu - 2.36)
+                    else:
+                        rvs1.append(spec.ccf.models[0].mu)
 
-                rv_errs1.append(spec.ccf.models[0].emu)
+                    rv_errs1.append(spec.ccf.models[0].emu)
+                else:
+                    rvs1.append(np.nan)
+                    rv_errs1.append(np.nan)
                 instruments.append(instrument)
                 specs.append(spec)
 
@@ -337,8 +364,18 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         self.df_rv = self.df_rv.sort_values(by='JD', ascending=True)
         self.df_rv = self.df_rv.reset_index(drop=True)
 
-        self.df_rv['JD'] = self.df_rv.JD - 2.46e6
+        paths = []
+        for spec in self.df_rv.spec:
+            if isinstance(spec.fname, tuple):
+                paths.append( tuple(
+                        [ os.path.split(t)[-1] for t in spec.fname ]))
+            else:
+                paths.append( os.path.split(spec.fname)[-1] )
+        self.df_rv['path'] = paths
+
+        self.df_rv['JD'] = self.df_rv.JD - self.time_offset
         self.instrument_list = self.df_rv.Instrument.value_counts().index
+
 
 
     def plot_rvs(self, ax=None, savefig=None, 
@@ -370,6 +407,138 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
+    def joker_test(self):
+
+        # Run the script within the specified conda environment
+        script = pkg_resources.resource_filename(__name__, 'thejoker_rs_test.py')
+        subprocess.run(f'source ~/anaconda3/etc/profile.d/conda.sh && conda activate thejoker2 && {script} && conda activate bhs', shell=True)
+        
+
+    def fit_joker(self, cleanup=True, **kwargs):
+        
+        '''
+        Fitting thejoker in an external environment
+
+        idea is to create a subprocess in a different conda env, excecute a script.
+        '''
+
+        #Run the rejection sampling
+        np.random.seed()
+        joker_input_file = f'tj_input_{np.random.randint(1e9)}.csv'
+        joker_output_file = f'tj_output_{np.random.randint(1e9)}.csv'
+        joker_kwargs_pickle = f'tj_kwargs_pickle_{np.random.randint(1e9)}.pickle'
+
+        df_rv = self.df_rv.copy()
+        df_rv['RV1_err'] = 1.0
+        df_rv.to_csv(joker_input_file, index=False)
+
+        script = pkg_resources.resource_filename(__name__, 'thejoker_rs.py')
+
+        with open(joker_kwargs_pickle, 'wb') as p:
+            joker_kwargs_dict = {'inputfile':joker_input_file,
+                                 'outputfile':joker_output_file}
+
+            pickle.dump({**joker_kwargs_dict, **kwargs}, p)
+
+        # Run the script within the specified conda environment
+        subprocess.run(f'source ~/anaconda3/etc/profile.d/conda.sh && conda activate thejoker2 && {script} "{os.path.abspath(joker_kwargs_pickle)}" && conda activate bhs', shell=True)
+
+        # Load in joker results
+        assert(os.path.isfile(joker_output_file))
+        self.df_rs = pd.read_csv(joker_output_file)
+
+        #Add fM column to df_rs
+
+        self.df_rs['fM'] = [ utils.mass_function(self.df_rs.P.iloc[i]*u.day,
+                                                 np.abs(self.df_rs.K.iloc[i])*u.km/u.s,
+                                                 e=self.df_rs.e.iloc[i])
+                             for i in range(len(self.df_rs)) ]
+
+        # Cleanup temporary files
+        if cleanup:
+            for fname in [joker_input_file, joker_output_file, joker_kwargs_pickle]:
+                subprocess.call(['rm', fname])
+
+        self.rs_unimodal_p = utils.is_P_unimodal(self.df_rs.P.to_numpy(),
+                                                 self.df_rv.JD.to_numpy())
+
+    def plot_joker_solution(self, ax=None, savefig=None):
+
+        if not hasattr(self, 'df_rs'):
+            raise ValueError('Joker fit must be run first')
+
+        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
+
+        tvals = np.linspace(self.df_rv.JD.min() - 10, self.df_rv.JD.max()+10, 1000)
+
+        if utils.is_P_unimodal(self.df_rs.P.to_numpy(), self.df_rv.JD.to_numpy()):
+        
+            K = self.df_rs.K.median()
+            P = self.df_rs.P.median()
+            omega = self.df_rs.omega.median()
+            gamma = self.df_rs.v0.median()
+            ecc = self.df_rs.e.median()
+            M0 = self.df_rs.M0.median()
+            logs = np.log(self.df_rs.s.median())
+            #M0_new = rv_orbit_fitter_tj.redetermine_M0(self.df_rv.JD.to_numpy(), self.df_rv.RV.to_numpy(),
+            #                        K, gamma, ecc, omega, P)
+        
+            models = np.array([[ rv_orbit_fitter.rv_model(tvals, K, gamma, M0, ecc, omega, P) ]])
+
+        else:
+            nmodels = min([100, len(self.df_rs)])
+            models = np.zeros((nmodels, len(tvals)))
+            
+            if nmodels == 100:
+                df_rs = self.df_rs.copy().sample(frac=1).reset_index(drop=True).iloc[:100]
+            else:
+                df_rs = self.df_rs.copy()
+
+            JDarr = self.df_rv.JD.to_numpy()
+            RVarr = self.df_rv.RV.to_numpy()
+            for i in tqdm(range(nmodels)):
+
+                K = self.df_rs.K.iloc[i]
+                P = self.df_rs.P.iloc[i]
+                omega = self.df_rs.omega.iloc[i]
+                gamma = self.df_rs.v0.iloc[i]
+                ecc = self.df_rs.e.iloc[i]
+                M0 = self.df_rs.M0.iloc[i]
+                logs = np.log(self.df_rs.s.iloc[i])
+
+                #M0_new = rv_orbit_fitter_tj.redetermine_M0(JDarr, RVarr, K, gamma, ecc, omega, P)
+
+                models[i] = rv_orbit_fitter_tj.rv_model(tvals, K, gamma, M0, ecc, omega, P)
+
+        x0 = 1
+        x1 = 50
+        x2 = 100
+        y0 = 0.9
+        y1 = 0.4
+        y2 = 0.2
+        X = np.array([[x0**2, x0, 1], [x1**2, x1, 1], [x2**2, x2, 1]])
+        Y = np.array([y0, y1, y2])
+        a, b, c = np.dot(np.linalg.inv(X), Y)
+        alpha = a*models.shape[0]**2 + b*models.shape[0]+c
+
+        if models.shape[0] == 1:
+            lw = 2
+        else:
+            lw = 1
+
+        for i in range(models.shape[0]):
+
+            ax.plot(tvals, models[i].reshape(-1), alpha=alpha, lw=lw, color='xkcd:red')
+
+        #Plot Data
+        ax.errorbar(self.df_rv.JD, self.df_rv.RV1,
+                    yerr=self.df_rv.RV1_err, color='black', ls='', marker='o',
+                    zorder=2)
+
+        ax.set_xlabel('Julian Date', fontsize=20)
+        ax.set_ylabel('RV (km/s)', fontsize=20)
+
+        return plotutils.plt_return(created_fig, fig, ax, savefig)
 
     def fit_rvs(self, guess, niters=50000, burnin=10000,
                 idx_mask=None, apsidal=False, **lnprob_kwargs):
@@ -387,6 +556,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             omega = gaia_orbit['omega']*np.pi/180
             M0 = np.pi #temp
 
+            pos = [ K1, gamma, M0, ecc, omega, period, -5]
+
             #Convert the gaia orbit dict to numba typed dictionary
             numba_dict = typed.Dict.empty(key_type=unicode_type, value_type=float64)
             for k, v in gaia_orbit.items():
@@ -394,6 +565,27 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                     continue
                 else:
                     numba_dict[k] = v
+        elif guess == 'Joker':
+            period = self.df_rs.P.median()
+            ecc = self.df_rs.e.median()
+            K1 = self.df_rs.K.median()
+            omega = self.df_rs.omega.median()
+
+            if K1 < 0:
+                K1 *= -1
+                omega = omega - np.pi
+
+            while omega < -np.pi:
+                omega += 2*np.pi
+            while omega > np.pi:
+                omega -= 2*np.pi
+            gamma = self.df_rs.v0.median()
+            #M0 = self.df_rs.M0.median()
+
+            M0 = np.pi
+
+            pos = [ K1, gamma, M0, ecc, omega, period, -5]
+            print(pos)
 
         else:
             if not apsidal:
@@ -541,8 +733,11 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             lower_err = med_val - lower
             upper_err = upper - med_val
 
-            title = utils.round_val_err(
-                    med_val, lower_err, upper_err) + ' ' + units[i]
+            try:
+                title = utils.round_val_err(
+                        med_val, lower_err, upper_err) + ' ' + units[i]
+            except:
+                title = 'title failed'
 
             ax[i,i].set_title(title, fontsize=12)
 
@@ -552,7 +747,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             fig.savefig(savefig)
 
     def plot_rv_orbit(self, ax=None, savefig=None, legend=False, legend_kwargs=None,
-                      markers_dict=None, tmin=None, tmax=None):
+                      markers_dict=None, tmin=None, tmax=None, 
+                      period_text=False, fm_text=False):
         
         if not hasattr(self, 'rv_samples'):
             raise ValueError('RV orbit must be fit first')
@@ -562,13 +758,15 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         '''
 
         fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
-        if created_fig:
+        if created_fig and ((not period_text) and (not fm_text)):
             fig.subplots_adjust(top=.98, right=.98)
+        elif created_fig and (period_text or fm_text):
+            fig.subplots_adjust(top=.95, right=.98)
 
         if tmin is None:
-            tmin = self.df_rv.JD.min()-10
+            tmin = self.df_rv.JD.min()-0.1*self.rv_samples.period.median()
         if tmax is None:
-            tmax = self.df_rv.JD.max()+10
+            tmax = self.df_rv.JD.max()+0.1*self.rv_samples.period.median()
         tvals = np.linspace(tmin, tmax, int(1e4))
 
         rv_offsets = [0] + [ self.rv_samples[f'rv_offset_{i-1}'].median()
@@ -623,7 +821,18 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             ax.set_xlabel(r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', fontsize=20)
         ax.set_ylabel(r'$\rm{RV}\ [\rm{km/s}]$', fontsize=20)
 
-        ax.set_xlim(tmin, tmax)
+        if period_text:
+            ax.text(.05, 1.0, r'$P={}$ d'.format(round(self.rv_samples.period.median(), 2)),
+                    ha='left', va='center', transform=ax.transAxes, fontsize=18,
+                    bbox=dict(edgecolor='black', facecolor='white'))
+        
+        if fm_text:
+            ax.text(.95, 1.0, r'$f(M)={}\ M_\odot$'.format(round(self.rv_samples.fM.median(), 2)),
+                    ha='right', va='center', transform=ax.transAxes, fontsize=18,
+                    bbox=dict(edgecolor='black', facecolor='white'))
+
+        if not isinstance(ax, brokenaxes.BrokenAxes):
+            ax.set_xlim(tmin, tmax)
 
         if legend:
             if legend_kwargs is None:
@@ -647,13 +856,16 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                 for instrument in self.instrument_list:
                     
                     df_plot = self.df_rv[self.df_rv.Instrument == instrument]
-                    e1 = axs.errorbar([-99], [99], [10], color='white', 
-                                      markeredgecolor='black', mew=2,
+                    e1 = axs.errorbar([-99], [99], yerr=[10], color='white', 
+                                      markeredgecolor='black', mew=2, ecolor='black',
                                       ls='', marker=markers_dict[instrument])
                     handles.append(e1)
 
                 axs.legend(handles, self.instrument_list,
                            **legend_kwargs)
+
+                axs.set_xlim(xlim)
+                axs.set_ylim(ylim)
 
             else:
                 ax.legend(**legend_kwargs)
@@ -854,6 +1066,45 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
+    def companion_mass_plot(self, M1vals, ax=None, savefig=None,
+                            mass_compare=1.4, incl_min=30, label=True, 
+                            legend_kwargs=None, **kwargs):
+
+        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(9, 6))
+        if created_fig:
+            fig.subplots_adjust(bottom=0.15)
+
+        incl_vals = np.linspace(incl_min, 90, 100)
+        fM = self.rv_samples.fM.median()*u.M_sun
+
+        if not utils.check_iter(M1vals):
+            M1vals = [M1vals]
+
+        lss = ['-', '--', ':', 'dashdot'][:len(M1vals)]
+
+        kwargs.setdefault('color', 'black')
+
+        for M1, ls in zip(M1vals, lss):
+
+            M2vals = [ utils.companion_mass(fM, M1*u.M_sun, incl).value for incl in incl_vals ]
+
+            if label:
+                ax.plot(incl_vals, M2vals, ls=ls, label=r'$M_1 = {}\ M_\odot$'.format(M1), **kwargs)
+            else:
+                ax.plot(incl_vals, M2vals, ls=ls, label='_nolegend_', **kwargs)
+
+        ax.set_xlabel(r'Orbital Inclination [$^{\circ}$]', fontsize=25)
+        ax.set_ylabel(r'Companion Mass [$M_\odot$]', fontsize=25)
+
+        if legend_kwargs is None:
+            legend_kwargs = {}
+        legend_kwargs.setdefault('loc', 'upper right')
+        legend_kwargs.setdefault('edgecolor', 'black')
+        legend_kwargs.setdefault('fontsize', '15')
+        ax.legend(**legend_kwargs)
+        ax.set_xlim(incl_min, 90)
+
+        return plotutils.plt_return(created_fig, fig, ax, savefig)
 
     def get_quadrature_spec(self):
         
@@ -861,7 +1112,27 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         idx = np.argmax(np.abs(self.df_rv.RV1 - gamma))
 
         return self.df_rv.spec.iloc[idx]
+
+    def write_rv_table(self, outfile):
+
+        df_rv = self.df_rv.copy()
+        df_rv['JD'] = [ f'{x:.2f}' for x in df_rv.JD ]
+        df_rv['RV1'] = [ f'{x:.1f}' for x in df_rv.RV1 ]
+        df_rv['RV1_err'] = [ f'{x:.1f}' for x in df_rv.RV1_err ]
+
+        labels = {}
+        if self.time_offset == 0:
+            labels['JD'] = [r'$\rm{JD}$', '[d]', 'l']
+        else:
+            labels['JD'] = [r'$\rm{JD}-'+str(self.time_offset/1e6)+r'\times10^6$', '[d]', 'l']
+
+        labels['RV1'] = ['RV', r'[km/s]', 'r']
+        labels['RV1_err'] = [r'$\sigma_{\rm{RV}}$', r'[km/s]', 'r']
+        labels['Instrument'] = ['Reference', '', 'r']
+
+        utils.write_latex_table(df_rv, labels, outfile)
     
+
 class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
     def measure_rvs(self, template1, template2):

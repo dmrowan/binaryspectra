@@ -89,17 +89,20 @@ class BaseProfile:
                 colors[i] = model_colors[i]
 
         xvals = self.df.RV.values
-        for i in range(len(self.models)):
-            
-            xvals = self.models[i].xvals
-            yvals = self.models[i].yvals
+        if len(self.models) > len(colors):
+            print(f'More models ({len(self.models)}) than colors ({len(colors)})')
+        else:
+            for i in range(len(self.models)):
+                
+                xvals = self.models[i].xvals
+                yvals = self.models[i].yvals
 
-            l = utils.round_val_err(self.models[i].mu, self.models[i].emu, 
-                                    as_string=True)+' km/s'
-            ax.plot(xvals, yvals, color=colors[i], label=l)
+                l = utils.round_val_err(self.models[i].mu, self.models[i].emu, 
+                                        as_string=True)+' km/s'
+                ax.plot(xvals, yvals, color=colors[i], label=l)
 
-        if legend:
-            ax.legend(edgecolor='black', fontsize=15)
+            if legend:
+                ax.legend(edgecolor='black', fontsize=15)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 

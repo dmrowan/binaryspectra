@@ -21,6 +21,14 @@ import ispec
 
 #Dom Rowan 2024
 
+def default_apf_orders():
+    
+    return np.concatenate([np.arange(20, 45), [47, 48, 49, 51, 54, 55, 62, 64]])
+
+def default_chiron_orders():
+    
+    return np.concatenate([np.arange(5, 29), [31, 32, 33, 34, 36, 37, 40, 41, 42, 49, 50, 52]])
+
 def load_spec(fname):
     
     with open(fname, 'rb') as p:
@@ -239,8 +247,8 @@ def modified_z_score(intensity):
     '''
     z-score from towardsdatascience.com/removing-spikes-from-raman-spectra-8a9fdda0ac22
     '''
-    median_int = np.median(intensity)
-    mad_int = np.median([np.abs(intensity - median_int)])
+    median_int = np.nanmedian(intensity)
+    mad_int = np.nanmedian([np.abs(intensity - median_int)])
     modified_z_scores = 0.6745 * (intensity - median_int) / mad_int
     return np.abs(modified_z_scores)
 

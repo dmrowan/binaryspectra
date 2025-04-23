@@ -101,7 +101,7 @@ class BaseProfile:
                                         as_string=True)+' km/s'
                 ax.plot(xvals, yvals, color=colors[i], label=l)
 
-            if legend:
+            if legend and len(self.models):
                 ax.legend(edgecolor='black', fontsize=15)
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
@@ -133,7 +133,13 @@ class CCFProfile(BaseProfile):
         idx_peaks = np.where(np.concatenate([[np.inf], np.diff(peaks)]) > 1)[0]
         idx_bases = np.where(np.concatenate([[np.inf], np.diff(base_points)]) > 1)[0]
         peaks = peaks[idx_peaks]
-        base_points = base_points[idx_bases]
+
+        try:
+            base_points = base_points[idx_bases]
+        except:
+            print('no base points found')
+            self.models = []
+            return
 
         #Identify selected peaks
         x_c = sm.add_constant(xvals, prepend=False)

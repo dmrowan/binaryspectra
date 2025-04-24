@@ -208,7 +208,7 @@ def lnprior_sb1(theta, period_mu=None, period_sigma=None, ecc_max=None, period_m
             return -np.inf
 
 @numba.jit(nopython=True)
-def lnprior_sb1_gaia(theta, gaia_dict, ecc_max=None, period_max=3000):
+def lnprior_sb1_gaia(theta, gaia_dict, ecc_max=None, period_max=3000, gaia_err_scale=1):
 
     K1, gamma, phi0, ecc, omega, period, logs = theta[:7]
     rvoffsets = theta[7:]
@@ -243,11 +243,11 @@ def lnprior_sb1_gaia(theta, gaia_dict, ecc_max=None, period_max=3000):
             lp += -0.5*((rvo)/1.5)**2
 
     #Gaia priors
-    lp += -0.5*((period-gaia_dict['Per'])/gaia_dict['e_Per'])**2
-    lp += -0.5*((ecc-gaia_dict['ecc'])/gaia_dict['e_ecc'])**2
-    lp += -0.5*((gamma-gaia_dict['Vcm'])/gaia_dict['e_Vcm'])**2
-    lp += -0.5*((K1-gaia_dict['K1'])/gaia_dict['e_K1'])**2
-    lp += -0.5*((omega-gaia_dict['omega'])/gaia_dict['e_omega'])**2
+    lp += -0.5*((period-gaia_dict['Per'])/(gaia_dict['e_Per']*gaia_err_scale))**2
+    lp += -0.5*((ecc-gaia_dict['ecc'])/(gaia_dict['e_ecc']*gaia_err_scale))**2
+    lp += -0.5*((gamma-gaia_dict['Vcm'])/(gaia_dict['e_Vcm']*gaia_err_scale))**2
+    lp += -0.5*((K1-gaia_dict['K1'])/(gaia_dict['e_K1']*gaia_err_scale))**2
+    lp += -0.5*((omega-gaia_dict['omega'])/(gaia_dict['e_omega']*gaia_err_scale))**2
 
     return lp
 
@@ -298,13 +298,14 @@ def lnprior_sb2(theta, period_mu=None, period_sigma=None, ecc_max=None, period_m
 @numba.jit(nopython=True)
 def lnprob_sb1(theta, t, rv1, rv_err1, 
                period_mu=None, period_sigma=None, ecc_max=None, period_max=3000, gaia_dict=None,
-               apsidal=False):
+               apsidal=False, gaia_err_scale=1):
 
     if gaia_dict is None:
         lp = lnprior_sb1(theta, period_mu=period_mu, period_sigma=period_sigma, ecc_max=ecc_max,
                      period_max=period_max, apsidal=apsidal)
     else:
-        lp = lnprior_sb1_gaia(theta, gaia_dict, ecc_max=ecc_max, period_max=period_max)
+        lp = lnprior_sb1_gaia(theta, gaia_dict, ecc_max=ecc_max, period_max=period_max, 
+                              gaia_err_scale=gaia_err_scale)
 
     if np.isinf(lp):
         return -np.inf

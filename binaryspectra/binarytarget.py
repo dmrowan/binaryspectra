@@ -85,6 +85,10 @@ class SpectroscopicBinary:
         self._load_apf_spectra(skip_files=skip_files)
         self._load_chiron_spectra(skip_files=skip_files)
 
+        #Check the coordinates of all the spectra
+        spectrum_utils.check_coordinates(self.spectra)
+
+
     def _load_pepsi_spectra(self, skip_files=None, **kwargs):
 
         pepsi_fnames = spectrum_utils.organize_pepsi_files(

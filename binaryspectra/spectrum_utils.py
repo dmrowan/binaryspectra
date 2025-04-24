@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from astropy import units as u
+from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import numpy as np
 import os
@@ -501,5 +502,39 @@ def write_ispec_segments(spec, orders, outfile, trim=None):
 
     df = pd.DataFrame({'wave_base':wave_base, 'wave_top':wave_top})
     df.to_csv(outfile, sep='\t', index=False)
+
+def check_coordinates(spec_list):
+    '''
+    Computes the maximum angular separation between coordinates in a list.
+
+    Parameters
+    ----------
+    spec_list : list
+        A list of objects with `.RA` and `.DEC` attributes in degrees.
+
+    Returns
+    -------
+    float
+        Maximum angular separation in arcseconds.
+
+    Prints
+    ------
+    A warning if the separation exceeds 10 arcseconds.
+    '''
+
+    coords = [SkyCoord(ra=spec.RA*u.deg, dec=spec.DEC*u.deg) 
+              for spec in spec_list]
+
+    max_sep = 0.0
+    for i in range(len(coords)):
+        for j in range(i+1, len(coords)):
+            sep = coords[i].separation(coords[j]).to('arcsec').value
+            if sep > max_sep:
+                max_sep = sep
+    
+    if max_sep > 10:
+        print(f'WARNING: separation of {max_sep:.2f} arcsec detected')
+
+    return max_sep
 
 

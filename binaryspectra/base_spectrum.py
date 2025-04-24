@@ -514,7 +514,7 @@ class BaseSpectrum:
                           upper_velocity_limit=200,
                           velocity_step=0.5):
         '''
-        Measure RVs with 1D-CCF
+        Measure RVs with 1D-CCF for base spectrum
         '''
 
         #Create velocity grid
@@ -569,8 +569,30 @@ class BaseSpectrum:
         self.ccf = profiles.CCFProfile(df_ccf, nbins=len(flux))
 
     def todcor(self, template1, template2, 
-               lower_velocity_limit, upper_velocity_limit,
+               lower_velocity_limit=None, 
+               upper_velocity_limit=None,
+               window=30,
                velocity_step=0.5):
+        '''
+        todcor method for base spectrum
+        '''
+
+        if lower_velocity_limit is None:
+            if len(self.ccf.models) > 2:
+                self.print('More than 2 components identified in 1D ccf')
+                self.print('Using two highest amplitude to set todcor window')
+
+                lower_velocity_limit = [self.ccf.models[0].mu - window//2,
+                                        self.ccf.models[1].mu - window//2]
+                upper_velocity_limit = [l+window for l in lower_velocity_limit ]
+
+            elif len(self.ccf.models) == 2:
+                lower_velocity_limit = [self.ccf.models[0].mu - window//2,
+                                        self.ccf.models[1].mu - window//2]
+                upper_velocity_limit = [l+window for l in lower_velocity_limit ]
+            else:
+                lower_velocity_limit = self.ccf.models[0].mu - window
+                upper_velocity_limit = lower_velocity_limit + int(2*window)
 
         self.todcor_profile = measure_rvs.todcor(
                 self, template1, template2,
@@ -579,24 +601,24 @@ class BaseSpectrum:
 
     
     def rv_pipeline(self, template1, template2, window=30, alpha_tolerance=0,
-                    lower_velocity_limit=None, upper_velocity_limit=None):
+                    ccf_lower_velocity_limit=-200,
+                    ccf_upper_velocity_limit=200,
+                    lower_velocity_limit=None, 
+                    upper_velocity_limit=None):
         '''
-        Combine 1D CCF with TODCOR to measure RVs
+        Combine 1D CCF with TODCOR to measure RVs for base spectrum
         '''
 
-        self.cross_correlation(template1)
+        self.cross_correlation(template1, 
+                               lower_velocity_limit=ccf_lower_velocity_limit,
+                               upper_velocity_limit=ccf_upper_velocity_limit)
         self.ccf.model()
 
-        if lower_velocity_limit is None:
-            if len(self.ccf.models) == 2:
-                lower_velocity_limit = [self.ccf.models[0].mu - window//2,
-                                        self.ccf.models[1].mu - window//2]
-                upper_velocity_limit = [l+window for l in lower_velocity_limit ]
-            else:
-                lower_velocity_limit = self.ccf.models[0].mu - window
-                upper_velocity_limit = lower_velocity_limit + int(2*window)
+        self.todcor(template1, template2, 
+                    lower_velocity_limit=lower_velocity_limit, 
+                    upper_velocity_limit=upper_velocity_limit, 
+                    window=window)
 
-        self.todcor(template1, template2, lower_velocity_limit, upper_velocity_limit)
         #Param to allow for alpha < 1 + alpha_tolerance 
         #Most applicable to todmor profiles
         self.todcor_profile.alpha_tolerance = alpha_tolerance
@@ -1130,6 +1152,9 @@ class EchelleSpectrum:
                           lower_velocity_limit=-200, 
                           upper_velocity_limit=200,
                           velocity_step=0.5):
+        '''
+        ccf method for echelle spectrum
+        '''
 
         #Create velocity grid
         shifts = np.arange(
@@ -1240,6 +1265,10 @@ class EchelleSpectrum:
                upper_velocity_limit=None,
                window=30, velocity_step=0.5):
 
+        '''
+        todcor method for echelle spectrum
+        '''
+
         if lower_velocity_limit is None:
             if len(self.ccf.models) > 2:
                 self.print('More than 2 components identified in 1D ccf')
@@ -1266,15 +1295,25 @@ class EchelleSpectrum:
 
         return self.todcor_profile
 
-    def rv_pipeline(self, template1, template2, alpha_tolerance=0, 
+    def rv_pipeline(self, template1, template2, 
+                    window=30, alpha_tolerance=0, 
+                    ccf_lower_velocity_limit=-200,
+                    ccf_upper_velocity_limit=200,
                     lower_velocity_limit=None,
                     upper_velocity_limit=None):
+        '''
+        rv pipeline for echelle spectrum
+        '''
 
-        self.cross_correlation(template1)
+        self.cross_correlation(template1, 
+                               lower_velocity_limit=ccf_lower_velocity_limit,
+                               upper_velocity_limit=ccf_upper_velocity_limit)
         self.ccf.model()
+
         self.todcor(template1, template2, 
                     lower_velocity_limit=lower_velocity_limit,
-                    upper_velocity_limit=upper_velocity_limit)
+                    upper_velocity_limit=upper_velocity_limit, 
+                    window=window)
 
         #Param to allow for alpha < 1 + alpha_tolerance 
         #Most applicable to todmor profiles

@@ -6,7 +6,7 @@ import numpy as np
 import numba
 import pandas as pd
 from scipy.optimize import minimize
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 import warnings
 
 from . import spectrum_utils, utils

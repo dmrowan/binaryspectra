@@ -240,8 +240,9 @@ class SpectroscopicBinary:
     def correct_system_velocity(self):
 
         if not self._gamma_corrected:
+            rv_samples, _ = self.get_mcmc_chain()
             for spec in self.spectra:
-                spec.shift_rv(-1*self.rv_samples.gamma.median())
+                spec.shift_rv(-1*rv_samples.gamma.median())
             self._gamma_corrected = True
 
     @property
@@ -269,7 +270,8 @@ class SpectroscopicBinary:
         df_rv['gap'] = np.concatenate([np.zeros(1), np.diff(df_rv.JD)])
 
         #Period to use for break selection
-        period = self.rv_samples.period.median()
+        rv_samples, _ = self.get_mcmc_chain()
+        period = rv_samples.period.median()
         df_rv['gap_period'] = df_rv.gap / period
         idx = np.where(df_rv.gap_period > gap)[0]
         xlims = []
@@ -737,17 +739,17 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         mcmc_cols = mcmc_cols + [ f'rv_offset_{i}' 
                               for i in range(len(self.instrument_list)-1) ]
 
-        self.rv_samples = pd.DataFrame(samples, columns=mcmc_cols)
+        rv_samples = pd.DataFrame(samples, columns=mcmc_cols)
 
-        self.rv_samples['T0'] = self.rv_samples.M0 * self.rv_samples.period / (2*np.pi)
+        rv_samples['T0'] = rv_samples.M0 * rv_samples.period / (2*np.pi)
 
         #Add mass function column
-        self.rv_samples['fM'] = utils.mass_function(
-                self.rv_samples.period.to_numpy()*u.day,
-                np.abs(self.rv_samples.K1.to_numpy())*u.km/u.s,
-                e=self.rv_samples.ecc.to_numpy()).value
+        rv_samples['fM'] = utils.mass_function(
+                rv_samples.period.to_numpy()*u.day,
+                np.abs(rv_samples.K1.to_numpy())*u.km/u.s,
+                e=rv_samples.ecc.to_numpy()).value
 
-        return self.rv_samples, lnprob
+        return rv_samples, lnprob
 
 
     def plot_rv_corner(self, savefig=None, figsize=None, 
@@ -1440,20 +1442,18 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         mcmc_cols = ['K1', 'K2', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs1', 'logs2']
         mcmc_cols = mcmc_cols + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
 
-        self.rv_samples = pd.DataFrame(samples, columns=mcmc_cols)
+        rv_samples = pd.DataFrame(samples, columns=mcmc_cols)
 
-        self.rv_samples['T0'] = self.rv_samples.M0 * self.rv_samples.period / (2*np.pi)
+        rv_samples['T0'] = rv_samples.M0 * rv_samples.period / (2*np.pi)
 
         self.calculate_rv_chi2()
 
-        return self.rv_samples, lnprob
+        return rv_samples, lnprob
 
     def plot_rv_corner(self, savefig=None, figsize=None):
         
-        if not hasattr(self, 'rv_samples'):
-            raise ValueError('RV orbit must be fit first')
-
-        samples = self.rv_samples.copy()
+        samples, lnprob = self.get_mcmc_chain()
+        samples = samples.copy()
         samples['M0'] = samples.T0
         samples = samples.drop(columns=['T0'], errors='ignore')
 
@@ -1510,8 +1510,7 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
     def plot_rv_orbit(self, ax=None, savefig=None, legend=False, legend_kwargs=None,
                           markers_dict=None):
         
-        if not hasattr(self, 'rv_samples'):
-            raise ValueError('RV orbit must be fit first')
+        samples, _ = self.get_mcmc_chain()
 
         fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
         if created_fig:
@@ -1520,7 +1519,7 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         tvals = np.linspace(self.df_rv.JD.min()-10, self.df_rv.JD.max()+10,
                             int(1e4))
 
-        rv_offsets = [0] + [ self.rv_samples[f'rv_offset_{i-1}'].median()
+        rv_offsets = [0] + [ rv_samples[f'rv_offset_{i-1}'].median()
                              for i in range(1, len(self.instrument_list)) ]
 
         if markers_dict is None:
@@ -1565,7 +1564,7 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         for i in range(100):
             
-            sample = self.rv_samples.iloc[np.random.randint(0, len(self.rv_samples))].to_numpy()
+            sample = rv_samples.iloc[np.random.randint(0, len(rv_samples))].to_numpy()
             K1, K2, gamma, phi0, ecc, omega, period = sample[:7]
 
             model1 = rv_orbit_fitter.rv_model(
@@ -1633,10 +1632,12 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         if not hasattr(self, 'rv_samples'):
             raise ValueError('RV orbit must be fit first')
 
+        rv_samples, _ = self.get_mcmc_chain()
+
         #Get sample corresponding to the median period
         if idx is None:
-            idx = np.argsort(self.rv_samples.period.values)[len(self.rv_samples)//2]
-        sample = self.rv_samples.iloc[idx].to_numpy()
+            idx = np.argsort(rv_samples.period.values)[len(rv_samples)//2]
+        sample = rv_samples.iloc[idx].to_numpy()
 
         K1, K2, gamma, phi0, ecc, omega, period, logs1, logs2 = sample[:9]
         rv_offset_values = np.concatenate([np.array([0]), sample[9:]])
@@ -1931,16 +1932,18 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         input_fnames = []
 
 
-        period = self.rv_samples.period.median()
-        M0 = self.rv_samples.M0.median()
+        rv_samples, _ = self.get_mcmc_chain()
+
+        period = rv_samples.period.median()
+        M0 = rv_samples.M0.median()
         #tper = M0*period/(2*np.pi)
         #tper_err = 0
         tper = self.df_rv.JD.median()
         tper_err = period/2
-        ecc = self.rv_samples.ecc.median()
-        omega = self.rv_samples.omega.median() * 180/np.pi
-        K1 = self.rv_samples.K1.median()
-        K2 = self.rv_samples.K2.median()
+        ecc = rv_samples.ecc.median()
+        omega = rv_samples.omega.median() * 180/np.pi
+        K1 = rv_samples.K1.median()
+        K2 = rv_samples.K2.median()
 
         #Calculate flux ratio
         if alpha is None:

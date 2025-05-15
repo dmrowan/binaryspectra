@@ -42,6 +42,9 @@ class SpectroscopicBinary:
         self._gamma_corrected=False
         self._spectra_dir = None
 
+        self.burnin = 0
+        self.lnprob_cutoff = -np.inf
+
     @property
     def verbose(self):
         return self._verbose
@@ -309,6 +312,93 @@ class SpectroscopicBinary:
         else:
             return bax
 
+    @property
+    def burnin(self):
+        return self._burnin
+
+    @burnin.setter
+    def burnin(self, value):
+        self._burnin = value
+
+    @property
+    def lnprob_cutoff(self):
+        return self._lnprob_cutoff
+
+    @lnprob_cutoff.setter
+    def lnprob_cutoff(self, value):
+        self._lnprob_cutoff = value
+
+    def _get_flat_mcmc_samples(self):
+
+        if hasattr(self, '_mcmc_chain_path'):
+            lnprob = self.loaded_lnprob
+            samples = self.loaded_samples
+        else:
+            lnprob = self.rv_sampler.lnprobability.copy()
+            samples = self.rv_sampler.get_chain(discard=0, thin=1)
+
+        burnin = self.burnin
+        lnprob_cutoff = self.lnprob_cutoff
+        thin = 1
+
+        samples = samples[burnin:, :, :][::thin, :, :] #n_steps, #n_walkers, #n_dim
+        lnprob = lnprob[:, burnin:][:, ::thin] #n_walkers, #n_steps
+        lnprob = lnprob.T #n_steps, #n_walkers
+
+        samples_flat = samples.reshape(-1, samples.shape[2]) #nsteps*nwalkers, n_dim
+        
+        lnprob_flat = lnprob.reshape(-1) #n_steps*n_walkers
+
+        lnprob_inds = np.where(lnprob_flat > lnprob_cutoff)[0]
+        samples = samples_flat[lnprob_inds]
+        lnprob = lnprob_flat[lnprob_inds]
+
+        return samples, lnprob
+
+    def save_mcmc_chain(self, outfile, full=True):
+
+        if full:
+            lnprob = self.rv_sampler.lnprobability.copy()
+            samples = self.rv_sampler.get_chain(discard=0, thin=1)
+        else:
+            samples, lnprob = self.get_mcmc_chain()
+
+        with open(outfile, 'wb') as p:
+            pickle.dump((samples, lnprob), p)
+
+    def load_mcmc_chain(self, infile):
+
+        with open(infile, 'rb') as p:
+            samples, lnprob = pickle.load(p)
+
+        self.loaded_samples = samples
+        self.loaded_lnprob = lnprob
+        self._mcmc_chain_path = infile
+
+    def plot_lnprob(self, ax=None, savefig=None):
+
+        fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(9, 6))
+
+        if hasattr(self, '_mcmc_chain_path'):
+            lnprob = self.loaded_lnprob
+        else:
+            lnprob = self.rv_sampler.lnprobability.copy()
+
+        burnin = self.burnin
+        lnprob_cutoff = self.lnprob_cutoff
+        thin = 1
+
+        lnprob = lnprob[:, burnin:][:, ::thin]
+        lnprob[lnprob < lnprob_cutoff] = np.nan
+
+        for i in range(lnprob.shape[0]):
+            ax.plot(np.arange(len(lnprob[i, :]))+burnin, lnprob[i,:], lw=1, alpha=0.6, rasterized=True)
+
+        ax.set_xlabel('Iterations', fontsize=20)
+        ax.set_ylabel('lnprob', fontsize=20)
+
+        return plotutils.plt_return(created_fig, fig, ax, savefig)
+
     def to_dill(self, outfile):
         
         with open(outfile, 'wb') as p:
@@ -379,8 +469,6 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         self.df_rv['JD'] = self.df_rv.JD - self.time_offset
         self.instrument_list = self.df_rv.Instrument.value_counts().index
-
-
 
     def plot_rvs(self, ax=None, savefig=None, 
                  markers_dict=None, plot_kwargs=None):
@@ -544,12 +632,14 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
-    def fit_rvs(self, guess, niters=50000, burnin=10000,
+    def fit_rvs(self, guess, niters=50000, 
                 idx_mask=None, apsidal=False, **lnprob_kwargs):
 
         '''
-        Fit RV model 
+        Fit RV model for single-lined spectroscopic bianry
         '''
+
+        self._fit_apsidal = apsidal
 
         if guess == 'Gaia':
             gaia_orbit = utils.query_gaia_orbit(self.name)
@@ -630,23 +720,26 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             lnprob_kwargs.setdefault('period_mu', period)
             lnprob_kwargs.setdefault('period_sigma', period*0.1)
 
-        sampler = emcee.EnsembleSampler(
+        self.rv_sampler = emcee.EnsembleSampler(
                 nwalkers, ndim, rv_orbit_fitter.lnprob_sb1,
                 args=lnprob_args,
                 kwargs=lnprob_kwargs)
 
-        sampler.run_mcmc(pos, niters, progress=self.verbose)
-        samples = sampler.get_chain(discard=burnin, flat=True)
-        rv_samples =pd.DataFrame(samples)
-        columns = ['K1', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs']
-        if apsidal:
-            columns.append('omegadot')
+        self.rv_sampler.run_mcmc(pos, niters, progress=self.verbose)
 
-        columns = columns + [ f'rv_offset_{i}' 
+    def get_mcmc_chain(self):
+
+        samples, lnprob = self._get_flat_mcmc_samples()
+
+        mcmc_cols = ['K1', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs']
+        if self._fit_apsidal:
+            mcmc_cols.append('omegadot')
+        mcmc_cols = mcmc_cols + [ f'rv_offset_{i}' 
                               for i in range(len(self.instrument_list)-1) ]
-        rv_samples.columns = columns
-        rv_samples['T0'] = rv_samples.M0 * rv_samples.period / (2*np.pi)
-        self.rv_samples = rv_samples
+
+        self.rv_samples = pd.DataFrame(samples, columns=mcmc_cols)
+
+        self.rv_samples['T0'] = self.rv_samples.M0 * self.rv_samples.period / (2*np.pi)
 
         #Add mass function column
         self.rv_samples['fM'] = utils.mass_function(
@@ -654,14 +747,15 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                 np.abs(self.rv_samples.K1.to_numpy())*u.km/u.s,
                 e=self.rv_samples.ecc.to_numpy()).value
 
+        return self.rv_samples, lnprob
+
+
     def plot_rv_corner(self, savefig=None, figsize=None, 
                        gaia_priors=False,
                        offset_numeric_label=True):
 
-        if not hasattr(self, 'rv_samples'):
-            raise ValueError('RV orbit must be fit first')
-
-        samples = self.rv_samples.copy()
+        samples, _ = self.get_mcmc_chain()
+        samples = samples.copy()
         samples['M0'] = samples.T0.values
         samples = samples.drop(columns=['T0', 'fM'], errors='ignore')
 
@@ -754,12 +848,11 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                       markers_dict=None, tmin=None, tmax=None, 
                       period_text=False, fm_text=False):
         
-        if not hasattr(self, 'rv_samples'):
-            raise ValueError('RV orbit must be fit first')
-
         '''
         Plot single-lined RV model
         '''
+
+        rv_samples, _ = self.get_mcmc_chain()
 
         fig, ax, created_fig = plotutils.fig_init(ax=ax, figsize=(10, 6))
         if created_fig and ((not period_text) and (not fm_text)):
@@ -768,12 +861,12 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             fig.subplots_adjust(top=.95, right=.98)
 
         if tmin is None:
-            tmin = self.df_rv.JD.min()-0.1*self.rv_samples.period.median()
+            tmin = self.df_rv.JD.min()-0.1*rv_samples.period.median()
         if tmax is None:
-            tmax = self.df_rv.JD.max()+0.1*self.rv_samples.period.median()
+            tmax = self.df_rv.JD.max()+0.1*rv_samples.period.median()
         tvals = np.linspace(tmin, tmax, int(1e4))
 
-        rv_offsets = [0] + [ self.rv_samples[f'rv_offset_{i-1}'].median()
+        rv_offsets = [0] + [ rv_samples[f'rv_offset_{i-1}'].median()
                              for i in range(1, len(self.instrument_list)) ]
 
         if markers_dict is None:
@@ -802,12 +895,12 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                             marker=markers_dict[instrument], ls='', 
                             alpha=0.5)
 
-        apsidal = 'omegadot' in self.rv_samples.columns
+        apsidal = 'omegadot' in rv_samples.columns
 
         for i in range(100):
             
-            sample = self.rv_samples.iloc[
-                    np.random.randint(0, len(self.rv_samples))].to_numpy()
+            j = np.random.randint(0, len(rv_samples))
+            sample = rv_samples.iloc[j].to_numpy()
             if not apsidal:
                 K1, gamma, phi0, ecc, omega, period = sample[:6]
                 model1 = rv_orbit_fitter.rv_model(
@@ -826,12 +919,12 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         ax.set_ylabel(r'$\rm{RV}\ [\rm{km/s}]$', fontsize=20)
 
         if period_text:
-            ax.text(.05, 1.0, r'$P={}$ d'.format(round(self.rv_samples.period.median(), 2)),
+            ax.text(.05, 1.0, r'$P={}$ d'.format(round(rv_samples.period.median(), 2)),
                     ha='left', va='center', transform=ax.transAxes, fontsize=18,
                     bbox=dict(edgecolor='black', facecolor='white'))
         
         if fm_text:
-            ax.text(.95, 1.0, r'$f(M)={}\ M_\odot$'.format(round(self.rv_samples.fM.median(), 2)),
+            ax.text(.95, 1.0, r'$f(M)={}\ M_\odot$'.format(round(rv_samples.fM.median(), 2)),
                     ha='right', va='center', transform=ax.transAxes, fontsize=18,
                     bbox=dict(edgecolor='black', facecolor='white'))
 
@@ -878,12 +971,12 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
     def calculate_rv_residuals(self, idx=None):
         
-        if not hasattr(self, 'rv_samples'):
-            raise ValueError('RV orbit must be fit first')
+
+        rv_samples, _ = self.get_mcmc_chain()
 
         if idx is None:
-            idx = np.argsort(self.rv_samples.period.values)[len(self.rv_samples)//2]
-        sample = self.rv_samples.iloc[idx].to_numpy()
+            idx = np.argsort(rv_samples.period.values)[len(rv_samples)//2]
+        sample = rv_samples.iloc[idx].to_numpy()
 
         K1, gamma, phi0, ecc, omega, period, logs = sample[:7]
         rv_offset_values = np.concatenate([np.array([0]), sample[7:]])
@@ -1037,13 +1130,15 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         incl = incl *np.pi/180
 
+        rv_samples, _ = self.get_mcmc_chain()
+
         for i in tqdm(range(100)):
             j = -1*(i+1)
-            K = self.rv_samples.K1.iloc[j]
-            P = self.rv_samples.period.iloc[j]
-            T0 = self.rv_samples.T0.iloc[j]
-            ecc = self.rv_samples.ecc.iloc[j]
-            omega = self.rv_samples.omega.iloc[j]
+            K = rv_samples.K1.iloc[j]
+            P = rv_samples.period.iloc[j]
+            T0 = rv_samples.T0.iloc[j]
+            ecc = rv_samples.ecc.iloc[j]
+            omega = rv_samples.omega.iloc[j]
 
             seps = astrometric_orbit_fitter.projected_sep(
                     tvals, M1, K, P, T0, ecc, omega, incl, distance)
@@ -1079,7 +1174,9 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
             fig.subplots_adjust(bottom=0.15)
 
         incl_vals = np.linspace(incl_min, 90, 100)
-        fM = self.rv_samples.fM.median()*u.M_sun
+
+        rv_samples, _ = self.get_mcmc_chain()
+        fM = rv_samples.fM.median()*u.M_sun
 
         if not utils.check_iter(M1vals):
             M1vals = [M1vals]
@@ -1112,7 +1209,8 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
 
     def get_quadrature_spec(self):
         
-        gamma = self.rv_samples.gamma.median()
+        rv_samples, _ = self.get_mcmc_chain()
+        gamma = rv_samples.gamma.median()
         idx = np.argmax(np.abs(self.df_rv.RV1 - gamma))
 
         return self.df_rv.spec.iloc[idx]
@@ -1135,7 +1233,6 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
         labels['Instrument'] = ['Reference', '', 'r']
 
         utils.write_latex_table(df_rv, labels, outfile)
-    
 
 class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
@@ -1285,8 +1382,12 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
-    def fit_rvs(self, guess, niters=50000, burnin=10000, 
+    def fit_rvs(self, guess, niters=50000, 
                 idx_mask=None, **lnprob_kwargs):
+
+        '''
+        fit rvs for double-lined spectroscopic binary
+        '''
         
         K1, K2, gamma, M0, ecc, omega, period = guess
 
@@ -1325,27 +1426,27 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         lnprob_kwargs.setdefault('period_mu', period)
         lnprob_kwargs.setdefault('period_sigma', period*0.1)
 
-        sampler = emcee.EnsembleSampler(
+        self.rv_sampler = emcee.EnsembleSampler(
                 nwalkers, ndim, rv_orbit_fitter.lnprob_sb2,
                 args=lnprob_args,
                 kwargs=lnprob_kwargs)
 
-        sampler.run_mcmc(pos, niters, progress=self.verbose)
-        samples = sampler.get_chain(discard=burnin, flat=True)
-        rv_samples =pd.DataFrame(samples)
-        columns = ['K1', 'K2', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs1', 'logs2']
-        columns = columns + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
-        rv_samples.columns = columns
-        self.rv_samples = rv_samples
+        self.rv_sampler.run_mcmc(pos, niters, progress=self.verbose)
 
-        #Add T0 column
-        self.rv_samples['T0'] = (self.rv_samples.M0 - self.rv_samples.omega - np.pi/2)*self.rv_samples.period/(2*np.pi)
+    def get_mcmc_chain(self):
 
-        while self.rv_samples['T0'].median() < 0.0:
-            self.rv_samples['T0'] = self.rv_samples.T0 + self.rv_samples.period
+        samples, lnprob = self._get_flat_mcmc_samples()
+
+        mcmc_cols = ['K1', 'K2', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs1', 'logs2']
+        mcmc_cols = mcmc_cols + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
+
+        self.rv_samples = pd.DataFrame(samples, columns=mcmc_cols)
+
+        self.rv_samples['T0'] = self.rv_samples.M0 * self.rv_samples.period / (2*np.pi)
 
         self.calculate_rv_chi2()
 
+        return self.rv_samples, lnprob
 
     def plot_rv_corner(self, savefig=None, figsize=None):
         

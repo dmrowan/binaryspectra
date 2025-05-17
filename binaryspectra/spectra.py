@@ -9,18 +9,22 @@ from astropy.modeling import models
 from astroquery.vizier import Vizier
 from astroquery.gaia import Gaia
 Gaia.ROW_LIMIT = -1
+from astropy.units import UnitsWarning
 import io
+import logging
 import matplotlib.pyplot as plt
 from matplotlib import rc
 import numpy as np
 import pandas as pd
 from pyvo.dal.ssa import SSAService
 import requests
+
 try:
     from sparcl.client import SparclClient
     client = SparclClient()
 except:
     print('SparclClient connection failed')
+
 from scipy.ndimage import median_filter
 from specutils.manipulation import FluxConservingResampler
 from specutils import Spectrum1D
@@ -31,6 +35,20 @@ import warnings
 
 from .base_spectrum import *
 from . import utils, spectrum_utils, plotutils
+
+warnings.simplefilter('ignore', category=UnitsWarning)
+
+# Save the current logging level
+logger = logging.getLogger('astroquery')
+original_level = logger.level
+
+# Suppress logging output
+logger.setLevel(logging.ERROR)
+try:
+    Gaia.login(credentials_file=os.environ['GAIA_CREDENTIALS'])
+except:
+    print('No connection to Gaia archive')
+logger.setLevel(original_level)
 
 #Dom Rowan 2024
 
@@ -536,17 +554,16 @@ class GaiaSpec(BaseSpectrum):
 class GaiaRVSspec(GaiaSpec):
 
     def __init__(self, source):
+
+        self.source = source
+
+        dl = Gaia.load_data(self.source, format='csv', data_release='Gaia DR3',
+                    retrieval_type='RVS')
+
+        self.df = list(dl.values())[0][0].to_pandas()
+        self.df = self.df.rename(columns={'flux_error':'flux_err'})
+        self.df['wavelength'] = self.df.wavelength * 10
         
-        rvs_query = Vizier(columns=["*", "+_r"], catalog="I/355/rvsmean")
-        rvs_query.ROW_LIMIT = -1
-
-        r = rvs_query.query_constraints(Source=str(source))[0]
-        rvs_table = r.to_pandas()
-
-        self.df = pd.DataFrame({'wavelength':rvs_table['lambda']*10,
-                                'flux':rvs_table['Flux'].values,
-                                'flux_err':rvs_table['e_Flux'].values})
-
         self.header = {}
         self.Source = source
 
@@ -557,18 +574,17 @@ class GaiaXPspec(GaiaSpec):
 
     def __init__(self, source):
 
-        xp_query= Vizier(columns=["*", "+_r"], catalog="I/355/xpsample")
-        xp_query.ROW_LIMIT = -1
+        self.source = source
 
-        r = xp_query.query_constraints(Source=str(source))[0]
-        xp_spec_result = r.to_pandas()
+        dl = Gaia.load_data(self.source, format='csv', data_release='Gaia DR3',
+                    retrieval_type='XP_SAMPLED')
 
-        xp_spec_result['wavelength']=xp_spec_result['lambda']*10
-        xp_spec_result['flux']=xp_spec_result['Flux']
-        xp_spec_result['flux_err']=xp_spec_result['e_Flux']
-        xp_spec_result=xp_spec_result.loc[xp_spec_result['Source']==source]
-        self.df = xp_spec_result[['wavelength', 'flux', 'flux_err']].reset_index(drop=True)
-        self.df = self.df.sort_values(by='wavelength', ascending=True).reset_index(drop=True)
+        self.df = list(dl.values())[0][0].to_pandas()
+
+        self.df = self.df.rename(columns={'flux_error': 'flux_err'})
+
+        self.df = self.df[['wavelength', 'flux', 'flux_err']]
+        self.df['wavelength'] = self.df.wavelength*10
 
         self.header = {}
         self.Source = source

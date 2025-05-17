@@ -401,6 +401,46 @@ class SpectroscopicBinary:
 
         return plotutils.plt_return(created_fig, fig, ax, savefig)
 
+    def plot_mcmc_trace(self, savefig=None, labels=None):
+        
+        lnprob = self.rv_sampler.lnprobability.copy()
+        samples = self.rv_sampler.get_chain(discard=0, thin=1).copy()
+
+        burnin = self.burnin
+        lnprob_cutoff = self.lnprob_cutoff
+        thin = 1
+
+        samples = samples[burnin:, :, :][::thin, :, :] #n_steps, #n_walkers, #n_dim
+        lnprob = lnprob[:, burnin:][:, ::thin] #n_walkers, #n_steps
+        lnprob = lnprob.T #n_steps, #n_walkers
+
+        ndim = samples.shape[2]
+        figsize = (10, ndim*4)
+
+        if labels is None:
+            labels = [f'param_{i}' for i in range(samples.shape[2])]
+
+        fig, ax = plt.subplots(ndim, 1, figsize=figsize, sharex=True)
+        fig.subplots_adjust(top=.98, right=.98, hspace=0.0)
+
+        for k in range(samples.shape[2]):
+            ax[k] = plotutils.plotparams(ax[k])
+            ax[k].set_ylabel(labels[k], fontsize=20)
+            for j in range(samples.shape[1]):
+
+                samples_walker = samples[:, j, k]
+                lnprob_walker = lnprob[:, j]
+                idx = np.where(lnprob_walker < lnprob_cutoff)[0]
+                samples_walker[idx] = np.nan
+                ax[k].plot(samples_walker, alpha=0.6, rasterized=True)
+
+        ax[-1].set_xlabel('Iterations - Burnin', fontsize=20)
+
+        if savefig is not None:
+            fig.savefig(savefig)
+        else:
+            plt.show()
+
     def to_dill(self, outfile):
         
         with open(outfile, 'wb') as p:
@@ -750,6 +790,16 @@ class SingleLinedSpectroscopicBinary(SpectroscopicBinary):
                 e=rv_samples.ecc.to_numpy()).value
 
         return rv_samples, lnprob
+
+    def plot_mcmc_trace(self, savefig=None):
+
+        mcmc_cols = ['K1', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs']
+        if self._fit_apsidal:
+            mcmc_cols.append('omegadot')
+        mcmc_cols = mcmc_cols + [ f'rv_offset_{i}' 
+                              for i in range(len(self.instrument_list)-1) ]
+
+        super().plot_mcmc_trace(savefig=savefig, labels=mcmc_cols)
 
 
     def plot_rv_corner(self, savefig=None, figsize=None, 
@@ -1449,6 +1499,14 @@ class DoubleLinedSpectroscopicBinary(SpectroscopicBinary):
         self.calculate_rv_chi2()
 
         return rv_samples, lnprob
+
+    def plot_mcmc_trace(self, savefig=None):
+        
+        mcmc_cols = ['K1', 'K2', 'gamma', 'M0', 'ecc', 'omega', 'period', 'logs1', 'logs2']
+        mcmc_cols = mcmc_cols + [ f'rv_offset_{i}' for i in range(len(self.instrument_list)-1) ]
+
+        super().plot_mcmc_trace(savefig=savefig, labels=mcmc_cols)
+
 
     def plot_rv_corner(self, savefig=None, figsize=None):
         
